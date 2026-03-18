@@ -47,6 +47,9 @@ public class PostgresResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by postgres.all.</summary>
+public class PostgresListItem : PostgresResponse { }
+
 public class DeployPostgresRequest
 {
     [JsonPropertyName("postgresId")]

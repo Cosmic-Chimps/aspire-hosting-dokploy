@@ -41,6 +41,9 @@ public class RedisResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by redis.all.</summary>
+public class RedisListItem : RedisResponse { }
+
 public class DeployRedisRequest
 {
     [JsonPropertyName("redisId")]

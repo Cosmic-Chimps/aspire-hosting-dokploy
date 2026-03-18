@@ -35,6 +35,9 @@ public class ApplicationResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by application.all — same shape as ApplicationResponse.</summary>
+public class ApplicationListItem : ApplicationResponse { }
+
 public class SaveDockerProviderRequest
 {
     [JsonPropertyName("applicationId")]

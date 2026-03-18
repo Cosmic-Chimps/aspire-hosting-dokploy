@@ -50,6 +50,9 @@ public class MariaDbResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by mariadb.all.</summary>
+public class MariaDbListItem : MariaDbResponse { }
+
 public class DeployMariaDbRequest
 {
     [JsonPropertyName("mariadbId")]

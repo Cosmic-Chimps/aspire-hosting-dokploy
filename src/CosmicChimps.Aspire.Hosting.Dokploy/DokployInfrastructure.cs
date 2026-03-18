@@ -122,6 +122,17 @@ internal sealed class DokployInfrastructure(
             stateStore.SetEnvironmentId(environmentId);
         }
 
+        // ── 8b. Reconcile state against live Dokploy — fills gaps if state file ──
+        //       was lost (e.g. first CI run, deleted state file, new machine).
+        await ReconcileStateAsync(
+            environmentId,
+            servicesToDeploy,
+            resource.AppNamePrefix ?? "",
+            apiClient,
+            stateStore,
+            ct
+        );
+
         // ── 9. PASS 1: Create all services, collect composeName → appName map ─
         //    We must do this before setting env vars because each service's env
         //    vars may reference other services by their Dokploy appName (DNS name).
@@ -168,7 +179,11 @@ internal sealed class DokployInfrastructure(
             // Replace compose service names with Dokploy appNames in env values,
             // also strip lines referencing skipped services (e.g. OTEL dashboard).
             var envString = svc.EnvString is not null
-                ? DokployComposeParser.ApplyServiceNameSubstitution(svc.EnvString, serviceNameMap, skipped)
+                ? DokployComposeParser.ApplyServiceNameSubstitution(
+                    svc.EnvString,
+                    serviceNameMap,
+                    skipped
+                )
                 : null;
 
             try
@@ -178,7 +193,10 @@ internal sealed class DokployInfrastructure(
                     var nativeId = stateStore.GetNativeServiceId(svc.Name)!;
                     logger.LogInformation(
                         "Deploying {Type} '{Service}' ({Id})",
-                        svc.NativeServiceType, svc.Name, nativeId);
+                        svc.NativeServiceType,
+                        svc.Name,
+                        nativeId
+                    );
                     await DeployNativeServiceAsync(svc, nativeId, apiClient, ct);
                 }
                 else
@@ -208,6 +226,167 @@ internal sealed class DokployInfrastructure(
     }
 
     // ── Pass 1: Create services ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Queries Dokploy for all existing services via <c>environment.one</c> and backfills any
+    /// entries missing from local state. Makes deployment idempotent even when the state file
+    /// has been lost. Matches by <c>appName.StartsWith("{prefix}{serviceName}")</c>.
+    /// </summary>
+    private async Task ReconcileStateAsync(
+        string environmentId,
+        IReadOnlyList<DokployServiceDescriptor> servicesToDeploy,
+        string appNamePrefix,
+        DokployApiClient apiClient,
+        DokployStateStore stateStore,
+        CancellationToken ct
+    )
+    {
+        // Fast path: if every service already has IDs in local state, skip the API call.
+        var missingServices = servicesToDeploy
+            .Where(svc =>
+                svc.IsNativeService
+                    ? stateStore.GetNativeServiceId(svc.Name) is null
+                    : stateStore.GetApplicationId(svc.Name) is null
+            )
+            .ToList();
+
+        if (missingServices.Count == 0)
+        {
+            logger.LogDebug("All services found in local state — skipping Dokploy reconciliation");
+            return;
+        }
+
+        logger.LogInformation(
+            "State missing for {Count} service(s) — querying Dokploy to reconcile: {Names}",
+            missingServices.Count,
+            string.Join(", ", missingServices.Select(s => s.Name))
+        );
+
+        // Single call: environment.one returns ALL service lists embedded.
+        EnvironmentOneResponse env;
+        try
+        {
+            env = await apiClient.GetEnvironmentAsync(environmentId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not fetch environment from Dokploy — will create fresh");
+            return;
+        }
+
+        logger.LogDebug(
+            "Dokploy live counts — apps:{Apps} redis:{Redis} mariadb:{MariaDb} mongo:{Mongo} mysql:{MySql} postgres:{Postgres}",
+            env.Applications.Count,
+            env.Redis.Count,
+            env.MariaDb.Count,
+            env.Mongo.Count,
+            env.MySql.Count,
+            env.Postgres.Count
+        );
+
+        if (env.Applications.Count > 0)
+            logger.LogDebug(
+                "Live apps: {Names}",
+                string.Join(", ", env.Applications.Select(a => $"{a.Name}|{a.AppName}"))
+            );
+
+        foreach (var svc in missingServices)
+        {
+            // appName = "{prefix}{name}{randomSuffix}" e.g. "da-seq-bihjcz"
+            bool MatchAppName(string? appName) =>
+                appName is not null
+                && appName.StartsWith(
+                    $"{appNamePrefix}{svc.Name}",
+                    StringComparison.OrdinalIgnoreCase
+                );
+
+            bool MatchName(string? name) =>
+                string.Equals(name, svc.Name, StringComparison.OrdinalIgnoreCase);
+
+            if (!svc.IsNativeService)
+            {
+                var match = env.Applications.FirstOrDefault(a =>
+                    MatchAppName(a.AppName) || MatchName(a.Name)
+                );
+                if (match?.ApplicationId is not null && match.AppName is not null)
+                {
+                    stateStore.SetApplicationId(svc.Name, match.ApplicationId);
+                    stateStore.SetAppName(svc.Name, match.AppName);
+                    logger.LogInformation(
+                        "Reconciled application '{Name}' → id={Id} appName={AppName}",
+                        svc.Name, match.ApplicationId, match.AppName
+                    );
+                }
+                else
+                    logger.LogDebug("No existing application found for '{Name}' — will create", svc.Name);
+                continue;
+            }
+
+            switch (svc.NativeServiceType)
+            {
+                case DokployNativeServiceType.Redis:
+                {
+                    var match = env.Redis.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
+                    if (match?.RedisId is not null && match.AppName is not null)
+                    {
+                        stateStore.SetNativeServiceId(svc.Name, match.RedisId);
+                        stateStore.SetAppName(svc.Name, match.AppName);
+                        logger.LogInformation("Reconciled Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, match.AppName);
+                    }
+                    else logger.LogDebug("No existing Redis found for '{Name}' — will create", svc.Name);
+                    break;
+                }
+                case DokployNativeServiceType.MariaDb:
+                {
+                    var match = env.MariaDb.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
+                    if (match?.MariaDbId is not null && match.AppName is not null)
+                    {
+                        stateStore.SetNativeServiceId(svc.Name, match.MariaDbId);
+                        stateStore.SetAppName(svc.Name, match.AppName);
+                        logger.LogInformation("Reconciled MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, match.AppName);
+                    }
+                    else logger.LogDebug("No existing MariaDB found for '{Name}' — will create", svc.Name);
+                    break;
+                }
+                case DokployNativeServiceType.Mongo:
+                {
+                    var match = env.Mongo.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
+                    if (match?.MongoId is not null && match.AppName is not null)
+                    {
+                        stateStore.SetNativeServiceId(svc.Name, match.MongoId);
+                        stateStore.SetAppName(svc.Name, match.AppName);
+                        logger.LogInformation("Reconciled MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, match.AppName);
+                    }
+                    else logger.LogDebug("No existing MongoDB found for '{Name}' — will create", svc.Name);
+                    break;
+                }
+                case DokployNativeServiceType.MySql:
+                {
+                    var match = env.MySql.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
+                    if (match?.MySqlId is not null && match.AppName is not null)
+                    {
+                        stateStore.SetNativeServiceId(svc.Name, match.MySqlId);
+                        stateStore.SetAppName(svc.Name, match.AppName);
+                        logger.LogInformation("Reconciled MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, match.AppName);
+                    }
+                    else logger.LogDebug("No existing MySQL found for '{Name}' — will create", svc.Name);
+                    break;
+                }
+                case DokployNativeServiceType.Postgres:
+                {
+                    var match = env.Postgres.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
+                    if (match?.PostgresId is not null && match.AppName is not null)
+                    {
+                        stateStore.SetNativeServiceId(svc.Name, match.PostgresId);
+                        stateStore.SetAppName(svc.Name, match.AppName);
+                        logger.LogInformation("Reconciled Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, match.AppName);
+                    }
+                    else logger.LogDebug("No existing Postgres found for '{Name}' — will create", svc.Name);
+                    break;
+                }
+            }
+        }
+    }
 
     /// <summary>Creates the Dokploy application (or reuses existing). Returns the Dokploy appName.</summary>
     private async Task<string> EnsureApplicationCreatedAsync(
@@ -289,11 +468,18 @@ internal sealed class DokployInfrastructure(
         {
             logger.LogInformation(
                 "{Type} '{Service}' already exists ({Id}), reusing",
-                svc.NativeServiceType, svc.Name, existingId);
+                svc.NativeServiceType,
+                svc.Name,
+                existingId
+            );
             return existingAppName;
         }
 
-        logger.LogInformation("Creating {Type} service '{Service}'", svc.NativeServiceType, svc.Name);
+        logger.LogInformation(
+            "Creating {Type} service '{Service}'",
+            svc.NativeServiceType,
+            svc.Name
+        );
 
         var password = ExtractDbPassword(svc) ?? Guid.NewGuid().ToString("N")[..16];
         var requestedAppName = string.IsNullOrEmpty(resource.AppNamePrefix)
@@ -303,26 +489,67 @@ internal sealed class DokployInfrastructure(
         var (nativeServiceId, assignedAppName) = svc.NativeServiceType switch
         {
             DokployNativeServiceType.Redis => await CreateRedisAsync(
-                svc, requestedAppName, environmentId, password, resource, apiClient, ct),
+                svc,
+                requestedAppName,
+                environmentId,
+                password,
+                resource,
+                apiClient,
+                ct
+            ),
 
             DokployNativeServiceType.MariaDb => await CreateMariaDbAsync(
-                svc, requestedAppName, environmentId, password, resource, apiClient, ct),
+                svc,
+                requestedAppName,
+                environmentId,
+                password,
+                resource,
+                apiClient,
+                ct
+            ),
 
             DokployNativeServiceType.Mongo => await CreateMongoAsync(
-                svc, requestedAppName, environmentId, password, resource, apiClient, ct),
+                svc,
+                requestedAppName,
+                environmentId,
+                password,
+                resource,
+                apiClient,
+                ct
+            ),
 
             DokployNativeServiceType.MySql => await CreateMySqlAsync(
-                svc, requestedAppName, environmentId, password, resource, apiClient, ct),
+                svc,
+                requestedAppName,
+                environmentId,
+                password,
+                resource,
+                apiClient,
+                ct
+            ),
 
             DokployNativeServiceType.Postgres => await CreatePostgresAsync(
-                svc, requestedAppName, environmentId, password, resource, apiClient, ct),
+                svc,
+                requestedAppName,
+                environmentId,
+                password,
+                resource,
+                apiClient,
+                ct
+            ),
 
-            _ => throw new InvalidOperationException($"Unknown native service type: {svc.NativeServiceType}"),
+            _ => throw new InvalidOperationException(
+                $"Unknown native service type: {svc.NativeServiceType}"
+            ),
         };
 
         logger.LogInformation(
             "Created {Type} '{Service}': id={Id}, appName={AppName}",
-            svc.NativeServiceType, svc.Name, nativeServiceId, assignedAppName);
+            svc.NativeServiceType,
+            svc.Name,
+            nativeServiceId,
+            assignedAppName
+        );
 
         stateStore.SetNativeServiceId(svc.Name, nativeServiceId);
         stateStore.SetAppName(svc.Name, assignedAppName);
@@ -330,92 +557,152 @@ internal sealed class DokployInfrastructure(
     }
 
     private async Task<(string id, string appName)> CreateRedisAsync(
-        DokployServiceDescriptor svc, string requestedAppName, string environmentId,
-        string password, DokployResource resource, DokployApiClient apiClient, CancellationToken ct)
+        DokployServiceDescriptor svc,
+        string requestedAppName,
+        string environmentId,
+        string password,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
     {
-        var created = await apiClient.CreateRedisAsync(new CreateRedisRequest
-        {
-            Name = svc.Name,
-            AppName = requestedAppName,
-            EnvironmentId = environmentId,
-            DatabasePassword = password,
-            DockerImage = svc.Image,
-            ServerId = resource.ServerId,
-        }, ct);
-        var id = created.RedisId ?? throw new InvalidOperationException(
-            $"redis.create returned no redisId for '{svc.Name}'");
+        var created = await apiClient.CreateRedisAsync(
+            new CreateRedisRequest
+            {
+                Name = svc.Name,
+                AppName = requestedAppName,
+                EnvironmentId = environmentId,
+                DatabasePassword = password,
+                DockerImage = svc.Image,
+                ServerId = resource.ServerId,
+            },
+            ct
+        );
+        var id =
+            created.RedisId
+            ?? throw new InvalidOperationException(
+                $"redis.create returned no redisId for '{svc.Name}'"
+            );
         return (id, created.AppName ?? requestedAppName);
     }
 
     private async Task<(string id, string appName)> CreateMariaDbAsync(
-        DokployServiceDescriptor svc, string requestedAppName, string environmentId,
-        string password, DokployResource resource, DokployApiClient apiClient, CancellationToken ct)
+        DokployServiceDescriptor svc,
+        string requestedAppName,
+        string environmentId,
+        string password,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
     {
-        var created = await apiClient.CreateMariaDbAsync(new CreateMariaDbRequest
-        {
-            Name = svc.Name,
-            AppName = requestedAppName,
-            EnvironmentId = environmentId,
-            DatabasePassword = password,
-            DockerImage = svc.Image,
-            ServerId = resource.ServerId,
-        }, ct);
-        var id = created.MariaDbId ?? throw new InvalidOperationException(
-            $"mariadb.create returned no mariadbId for '{svc.Name}'");
+        var created = await apiClient.CreateMariaDbAsync(
+            new CreateMariaDbRequest
+            {
+                Name = svc.Name,
+                AppName = requestedAppName,
+                EnvironmentId = environmentId,
+                DatabasePassword = password,
+                DockerImage = svc.Image,
+                ServerId = resource.ServerId,
+            },
+            ct
+        );
+        var id =
+            created.MariaDbId
+            ?? throw new InvalidOperationException(
+                $"mariadb.create returned no mariadbId for '{svc.Name}'"
+            );
         return (id, created.AppName ?? requestedAppName);
     }
 
     private async Task<(string id, string appName)> CreateMongoAsync(
-        DokployServiceDescriptor svc, string requestedAppName, string environmentId,
-        string password, DokployResource resource, DokployApiClient apiClient, CancellationToken ct)
+        DokployServiceDescriptor svc,
+        string requestedAppName,
+        string environmentId,
+        string password,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
     {
-        var created = await apiClient.CreateMongoAsync(new CreateMongoRequest
-        {
-            Name = svc.Name,
-            AppName = requestedAppName,
-            EnvironmentId = environmentId,
-            DatabasePassword = password,
-            DockerImage = svc.Image,
-            ServerId = resource.ServerId,
-        }, ct);
-        var id = created.MongoId ?? throw new InvalidOperationException(
-            $"mongo.create returned no mongoId for '{svc.Name}'");
+        var created = await apiClient.CreateMongoAsync(
+            new CreateMongoRequest
+            {
+                Name = svc.Name,
+                AppName = requestedAppName,
+                EnvironmentId = environmentId,
+                DatabasePassword = password,
+                DockerImage = svc.Image,
+                ServerId = resource.ServerId,
+            },
+            ct
+        );
+        var id =
+            created.MongoId
+            ?? throw new InvalidOperationException(
+                $"mongo.create returned no mongoId for '{svc.Name}'"
+            );
         return (id, created.AppName ?? requestedAppName);
     }
 
     private async Task<(string id, string appName)> CreateMySqlAsync(
-        DokployServiceDescriptor svc, string requestedAppName, string environmentId,
-        string password, DokployResource resource, DokployApiClient apiClient, CancellationToken ct)
+        DokployServiceDescriptor svc,
+        string requestedAppName,
+        string environmentId,
+        string password,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
     {
-        var created = await apiClient.CreateMySqlAsync(new CreateMySqlRequest
-        {
-            Name = svc.Name,
-            AppName = requestedAppName,
-            EnvironmentId = environmentId,
-            DatabasePassword = password,
-            DockerImage = svc.Image,
-            ServerId = resource.ServerId,
-        }, ct);
-        var id = created.MySqlId ?? throw new InvalidOperationException(
-            $"mysql.create returned no mysqlId for '{svc.Name}'");
+        var created = await apiClient.CreateMySqlAsync(
+            new CreateMySqlRequest
+            {
+                Name = svc.Name,
+                AppName = requestedAppName,
+                EnvironmentId = environmentId,
+                DatabasePassword = password,
+                DockerImage = svc.Image,
+                ServerId = resource.ServerId,
+            },
+            ct
+        );
+        var id =
+            created.MySqlId
+            ?? throw new InvalidOperationException(
+                $"mysql.create returned no mysqlId for '{svc.Name}'"
+            );
         return (id, created.AppName ?? requestedAppName);
     }
 
     private async Task<(string id, string appName)> CreatePostgresAsync(
-        DokployServiceDescriptor svc, string requestedAppName, string environmentId,
-        string password, DokployResource resource, DokployApiClient apiClient, CancellationToken ct)
+        DokployServiceDescriptor svc,
+        string requestedAppName,
+        string environmentId,
+        string password,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
     {
-        var created = await apiClient.CreatePostgresAsync(new CreatePostgresRequest
-        {
-            Name = svc.Name,
-            AppName = requestedAppName,
-            EnvironmentId = environmentId,
-            DatabasePassword = password,
-            DockerImage = svc.Image,
-            ServerId = resource.ServerId,
-        }, ct);
-        var id = created.PostgresId ?? throw new InvalidOperationException(
-            $"postgres.create returned no postgresId for '{svc.Name}'");
+        var created = await apiClient.CreatePostgresAsync(
+            new CreatePostgresRequest
+            {
+                Name = svc.Name,
+                AppName = requestedAppName,
+                EnvironmentId = environmentId,
+                DatabasePassword = password,
+                DockerImage = svc.Image,
+                ServerId = resource.ServerId,
+            },
+            ct
+        );
+        var id =
+            created.PostgresId
+            ?? throw new InvalidOperationException(
+                $"postgres.create returned no postgresId for '{svc.Name}'"
+            );
         return (id, created.AppName ?? requestedAppName);
     }
 
@@ -423,7 +710,8 @@ internal sealed class DokployInfrastructure(
         DokployServiceDescriptor svc,
         string nativeId,
         DokployApiClient apiClient,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         switch (svc.NativeServiceType)
         {
@@ -431,7 +719,10 @@ internal sealed class DokployInfrastructure(
                 await apiClient.DeployRedisAsync(new DeployRedisRequest { RedisId = nativeId }, ct);
                 break;
             case DokployNativeServiceType.MariaDb:
-                await apiClient.DeployMariaDbAsync(new DeployMariaDbRequest { MariaDbId = nativeId }, ct);
+                await apiClient.DeployMariaDbAsync(
+                    new DeployMariaDbRequest { MariaDbId = nativeId },
+                    ct
+                );
                 break;
             case DokployNativeServiceType.Mongo:
                 await apiClient.DeployMongoAsync(new DeployMongoRequest { MongoId = nativeId }, ct);
@@ -440,7 +731,10 @@ internal sealed class DokployInfrastructure(
                 await apiClient.DeployMySqlAsync(new DeployMySqlRequest { MySqlId = nativeId }, ct);
                 break;
             case DokployNativeServiceType.Postgres:
-                await apiClient.DeployPostgresAsync(new DeployPostgresRequest { PostgresId = nativeId }, ct);
+                await apiClient.DeployPostgresAsync(
+                    new DeployPostgresRequest { PostgresId = nativeId },
+                    ct
+                );
                 break;
         }
     }
@@ -451,7 +745,8 @@ internal sealed class DokployInfrastructure(
     /// </summary>
     private static string? ExtractDbPassword(DokployServiceDescriptor svc)
     {
-        if (svc.EnvString is null) return null;
+        if (svc.EnvString is null)
+            return null;
         // Check common password env var names across all DB types
         return ExtractEnvValue(svc.EnvString, "REDIS_PASSWORD")
             ?? ExtractEnvValue(svc.EnvString, "MYSQL_ROOT_PASSWORD")
@@ -481,18 +776,23 @@ internal sealed class DokployInfrastructure(
         // .env.Production may already contain a registry-qualified name (e.g. "jjchiw/apiservice:latest").
         // If it's still a bare local name (e.g. "apiservice:latest"), qualify it using ImagePrefix.
         var imageToUse = svc.Image;
-        var isLocalImage = !svc.Image.Contains('/') ||
-            svc.Image[..svc.Image.IndexOf('/')] is var host && !host.Contains('.') && !host.Contains(':');
+        var isLocalImage =
+            !svc.Image.Contains('/')
+            || svc.Image[..svc.Image.IndexOf('/')] is var host
+                && !host.Contains('.')
+                && !host.Contains(':');
 
         if (isLocalImage && registry?.ImagePrefix is { Length: > 0 } prefix)
         {
             var colon = svc.Image.LastIndexOf(':');
             var name = colon > 0 ? svc.Image[..colon] : svc.Image;
-            var tag  = colon > 0 ? svc.Image[(colon + 1)..] : "latest";
+            var tag = colon > 0 ? svc.Image[(colon + 1)..] : "latest";
             imageToUse = $"{prefix.TrimEnd('/')}/{name}:{tag}";
             logger.LogInformation(
                 "Qualified image '{Local}' → '{Qualified}' using registry prefix",
-                svc.Image, imageToUse);
+                svc.Image,
+                imageToUse
+            );
         }
         else if (isLocalImage && registry is null)
         {
@@ -500,7 +800,9 @@ internal sealed class DokployInfrastructure(
                 "Service '{Service}' uses a local image '{Image}'. "
                     + "Add 'builder.AddContainerRegistry(...)' (Aspire push) and "
                     + "set DokploySettings.Registry.ImagePrefix (Dokploy pull).",
-                svc.Name, svc.Image);
+                svc.Name,
+                svc.Image
+            );
         }
 
         // Save Docker image + pull credentials

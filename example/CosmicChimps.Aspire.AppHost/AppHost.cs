@@ -61,8 +61,13 @@ var dokploy = builder.PublishToDokploy(
 // Redis is detected automatically by image name → redis.create in Dokploy.
 var cache = builder.AddRedis("cache");
 
+// Seq — structured log/trace viewer.
+// Deployed to Dokploy as a regular application; all services send OTEL data to it.
+var seq = builder.AddSeq("seq").WithDataVolume();
+
 var apiService = builder
     .AddProject<Projects.CosmicChimps_Aspire_ApiService>("apiservice")
+    .WithReference(seq)
     .WithHttpHealthCheck("/health");
 
 builder
@@ -72,7 +77,6 @@ builder
     .WithReference(cache)
     .WaitFor(cache)
     .WithReference(apiService)
-    .WaitFor(apiService)
-    .WithDokployDomain(dokploy, "demo-aspire.vee.travel");
+    .WaitFor(apiService);
 
 builder.Build().Run();

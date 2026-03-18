@@ -50,6 +50,9 @@ public class MySqlResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by mysql.all.</summary>
+public class MySqlListItem : MySqlResponse { }
+
 public class DeployMySqlRequest
 {
     [JsonPropertyName("mysqlId")]

@@ -86,8 +86,13 @@ public class DokployApiClient
 
         if (existing?.ProjectId is not null)
         {
-            _logger.LogInformation("Found existing Dokploy project '{Name}' ({Id})", name, existing.ProjectId);
-            var envId = existing.DefaultEnvironmentId
+            _logger.LogInformation(
+                "Found existing Dokploy project '{Name}' ({Id})",
+                name,
+                existing.ProjectId
+            );
+            var envId =
+                existing.DefaultEnvironmentId
                 ?? throw new InvalidOperationException(
                     $"Project '{name}' ({existing.ProjectId}) has no environments"
                 );
@@ -115,11 +120,34 @@ public class DokployApiClient
         }
 
         if (projectId is null)
-            throw new InvalidOperationException($"project.create returned no projectId for '{name}'");
+            throw new InvalidOperationException(
+                $"project.create returned no projectId for '{name}'"
+            );
         if (environmentId is null)
-            throw new InvalidOperationException($"project.create returned no environmentId for '{name}'");
+            throw new InvalidOperationException(
+                $"project.create returned no environmentId for '{name}'"
+            );
 
         return (projectId, environmentId);
+    }
+
+    // ─── Environment ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches environment details including all embedded service lists
+    /// (applications, redis, mariadb, mongo, mysql, postgres).
+    /// This is the canonical way to list services — Dokploy has no separate *.all endpoints.
+    /// </summary>
+    public async Task<EnvironmentOneResponse> GetEnvironmentAsync(
+        string environmentId,
+        CancellationToken ct = default
+    )
+    {
+        return await _client
+            .Request("api", "environment.one")
+            .SetQueryParam("environmentId", environmentId)
+            .GetJsonAsync<EnvironmentOneResponse>(cancellationToken: ct)
+            ?? new EnvironmentOneResponse();
     }
 
     // ─── Applications ────────────────────────────────────────────────────────
@@ -203,9 +231,14 @@ public class DokployApiClient
         return response ?? throw new InvalidOperationException("No response from mariadb.create");
     }
 
-    public async Task DeployMariaDbAsync(DeployMariaDbRequest request, CancellationToken ct = default)
+    public async Task DeployMariaDbAsync(
+        DeployMariaDbRequest request,
+        CancellationToken ct = default
+    )
     {
-        await _client.Request("api", "mariadb.deploy").PostJsonAsync(request, cancellationToken: ct);
+        await _client
+            .Request("api", "mariadb.deploy")
+            .PostJsonAsync(request, cancellationToken: ct);
     }
 
     // ─── MongoDB ─────────────────────────────────────────────────────────────
@@ -263,9 +296,14 @@ public class DokployApiClient
         return response ?? throw new InvalidOperationException("No response from postgres.create");
     }
 
-    public async Task DeployPostgresAsync(DeployPostgresRequest request, CancellationToken ct = default)
+    public async Task DeployPostgresAsync(
+        DeployPostgresRequest request,
+        CancellationToken ct = default
+    )
     {
-        await _client.Request("api", "postgres.deploy").PostJsonAsync(request, cancellationToken: ct);
+        await _client
+            .Request("api", "postgres.deploy")
+            .PostJsonAsync(request, cancellationToken: ct);
     }
 
     // ─── Domains ─────────────────────────────────────────────────────────────

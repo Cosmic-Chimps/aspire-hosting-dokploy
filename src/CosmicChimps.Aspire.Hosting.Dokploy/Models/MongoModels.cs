@@ -44,6 +44,9 @@ public class MongoResponse
     public string? ApplicationStatus { get; set; }
 }
 
+/// <summary>Item returned by mongo.all.</summary>
+public class MongoListItem : MongoResponse { }
+
 public class DeployMongoRequest
 {
     [JsonPropertyName("mongoId")]
