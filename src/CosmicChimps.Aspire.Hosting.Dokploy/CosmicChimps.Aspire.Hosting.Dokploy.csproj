@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package metadata -->
+    <PackageId>CosmicChimps.Aspire.Hosting.Dokploy</PackageId>
+    <IsPackable>true</IsPackable>
+    <PackageTags>aspire hosting dokploy docker deployment paas</PackageTags>
+    <Description>Dokploy deployment integration for .NET Aspire — deploys each Aspire service as an individual Dokploy application or native managed resource (Redis, PostgreSQL, MySQL, MariaDB, MongoDB).</Description>
+    <Authors>Cosmic Chimps</Authors>
+    <Company>Cosmic Chimps</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Cosmic-Chimps/aspire-hosting-dokploy</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Cosmic-Chimps/aspire-hosting-dokploy</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.1.2-preview.1.26125.13" />
+    <PackageReference Include="Flurl.Http" Version="4.0.2" />
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="icon.png" Pack="true" PackagePath="\" Condition="Exists('icon.png')" />
+  </ItemGroup>
+</Project>

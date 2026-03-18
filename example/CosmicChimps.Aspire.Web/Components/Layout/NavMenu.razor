@@ -1,0 +1,45 @@
+﻿<div class="navbar navbar-dark ps-3 top-row">
+  <div class="container-fluid">
+    <a class="navbar-brand"
+       href="">
+      CosmicChimps.Aspire
+    </a>
+  </div>
+</div>
+
+<input class="navbar-toggler"
+       title="Navigation menu"
+       type="checkbox"/>
+
+<div class="nav-scrollable"
+     onclick="document.querySelector('.navbar-toggler').click()">
+  <nav class="flex-column nav">
+    <div class="nav-item px-3">
+      <NavLink class="nav-link"
+               href=""
+               Match="NavLinkMatch.All">
+        <span aria-hidden="true"
+              class="bi bi-house-door-fill">
+        </span> Home
+      </NavLink>
+    </div>
+
+    <div class="nav-item px-3">
+      <NavLink class="nav-link"
+               href="counter">
+        <span aria-hidden="true"
+              class="bi bi-plus-square-fill">
+        </span> Counter
+      </NavLink>
+    </div>
+
+    <div class="nav-item px-3">
+      <NavLink class="nav-link"
+               href="weather">
+        <span aria-hidden="true"
+              class="bi bi-list-nested">
+        </span> Weather
+      </NavLink>
+    </div>
+  </nav>
+</div>

@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/example/">
+    <Project Path="example/CosmicChimps.Aspire.ApiService/CosmicChimps.Aspire.ApiService.csproj" />
+    <Project Path="example/CosmicChimps.Aspire.AppHost/CosmicChimps.Aspire.AppHost.csproj" />
+    <Project Path="example/CosmicChimps.Aspire.ServiceDefaults/CosmicChimps.Aspire.ServiceDefaults.csproj" />
+    <Project Path="example/CosmicChimps.Aspire.Web/CosmicChimps.Aspire.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/CosmicChimps.Aspire.Hosting.Dokploy/CosmicChimps.Aspire.Hosting.Dokploy.csproj" />
+  </Folder>
+</Solution>
