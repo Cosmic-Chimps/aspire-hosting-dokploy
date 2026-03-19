@@ -52,8 +52,10 @@ jobs:
           key: dokploy-state-${{ github.repository }}-example
           restore-keys: dokploy-state-${{ github.repository }}-
 
-      - name: Deploy to Dokploy
+      - name: Setup Aspire CLI
         uses: timheuer/setup-aspire@v0.1.0
+
+      - name: Deploy to Dokploy
         working-directory: example/CosmicChimps.Aspire.AppHost
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
