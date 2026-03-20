@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.0.1">
+<Project Sdk="Aspire.AppHost.Sdk/13.1.3">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -8,18 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference
-      Include="..\..\src\CosmicChimps.Aspire.Hosting.Dokploy\CosmicChimps.Aspire.Hosting.Dokploy.csproj"
-      IsAspireProjectResource="false"
-    />
+    <ProjectReference Include="..\..\src\CosmicChimps.Aspire.Hosting.Dokploy\CosmicChimps.Aspire.Hosting.Dokploy.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="..\CosmicChimps.Aspire.ApiService\CosmicChimps.Aspire.ApiService.csproj" />
     <ProjectReference Include="..\CosmicChimps.Aspire.Web\CosmicChimps.Aspire.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.1.2" />
-    <PackageReference Include="Aspire.Hosting.Docker" Version="13.1.2-preview.1.26125.13" />
-    <PackageReference Include="Aspire.Hosting.Redis" Version="13.1.2" />
-    <PackageReference Include="Aspire.Hosting.Seq" Version="13.1.2" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.1.3-preview.1.26166.8" />
+    <PackageReference Include="Aspire.Hosting.Redis" Version="13.1.3" />
+    <PackageReference Include="Aspire.Hosting.Seq" Version="13.1.3" />
   </ItemGroup>
 </Project>
