@@ -12,7 +12,7 @@ name: Publish CosmicChimps.Aspire.Hosting.Dokploy to NuGet
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 jobs:
   publish:
@@ -23,14 +23,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # full history required for SourceLink
+          fetch-depth: 0 # full history required for SourceLink
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "10.x"
+          dotnet-version: '10.x'
 
       - name: Extract version from tag
         id: version
@@ -76,4 +76,4 @@ jobs:
             --api-key ${{ secrets.NUGET_API_KEY }} \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
-        continue-on-error: true  # snupkg push failure is non-fatal
+        continue-on-error: true # snupkg push failure is non-fatal
