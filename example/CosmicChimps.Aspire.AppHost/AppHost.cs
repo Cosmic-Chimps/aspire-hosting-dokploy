@@ -19,12 +19,24 @@ builder.AddContainerRegistry(
         ?? Environment.GetEnvironmentVariable("DOCKERHUB_REGISTRY_URL")
         ?? throw new InvalidOperationException("DockerHub Registry Url not configured"),
     repository: builder.Configuration["DockerHub:Username"]
-        ?? Environment.GetEnvironmentVariable("DOCKERHUB_Username")
-        ?? throw new InvalidOperationException("DockerHub Username Url not configured")
+        ?? Environment.GetEnvironmentVariable("DOCKERHUB_USERNAME")
+        ?? throw new InvalidOperationException("DockerHub Username not configured")
 );
 #pragma warning restore ASPIRECOMPUTE003
 
 // ── Dokploy: register as publish target ──────────────────────────────────────
+// One project in Dokploy can hold multiple environments (production, staging, dev).
+// Set EnvironmentName to target a specific environment — it is created automatically
+// if it doesn't exist inside the project.
+//
+//   aspire deploy  →  deploys to "production"
+//   DOKPLOY_ENVIRONMENT=staging aspire deploy  →  deploys to "staging"
+//
+var environmentName =
+    builder.Configuration["Dokploy:EnvironmentName"]
+    ?? Environment.GetEnvironmentVariable("DOKPLOY_ENVIRONMENT")
+    ?? "production";
+
 var dokploy = builder.PublishToDokploy(
     "demo-aspire",
     settings =>
@@ -39,12 +51,15 @@ var dokploy = builder.PublishToDokploy(
             ?? throw new InvalidOperationException("Dokploy API token not configured");
 
         settings.ProjectName = "demo-aspire";
+        settings.EnvironmentName = environmentName; // "production" | "staging" | "dev"
         settings.AppNamePrefix = "da-";
 
         // Pull credentials: Dokploy server needs these to `docker pull` from a private registry.
         // ImagePrefix must match the `repository` argument passed to AddContainerRegistry above.
-        var username = builder.Configuration["DockerHub:Username"];
-        var password = builder.Configuration["DockerHub:Password"];
+        var username = builder.Configuration["DockerHub:Username"]
+            ?? Environment.GetEnvironmentVariable("DOCKERHUB_USERNAME");
+        var password = builder.Configuration["DockerHub:Password"]
+            ?? Environment.GetEnvironmentVariable("DOCKERHUB_PASSWORD");
         if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
         {
             settings.Registry = new RegistryCredentials
@@ -74,6 +89,7 @@ builder
     .AddProject<Projects.CosmicChimps_Aspire_Web>("webfrontend")
     .WithExternalHttpEndpoints()
     .WithHttpHealthCheck("/health")
+    .WithDokployDomain(dokploy, $"web-{environmentName}.example.com")
     .WithReference(cache)
     .WaitFor(cache)
     .WithReference(apiService)

@@ -51,6 +51,7 @@ public static class DokployResourceExtensions
             DokployUrl = settings.DokployUrl,
             ApiToken = settings.ApiToken,
             ProjectName = settings.ProjectName,
+            EnvironmentName = settings.EnvironmentName,
             AppNamePrefix = settings.AppNamePrefix,
             ServerId = settings.ServerId,
             Registry = settings.Registry,

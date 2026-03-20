@@ -11,12 +11,20 @@ name: Deploy Example Aspire App to Dokploy
 #   DOCKERHUB_USERNAME      — DockerHub username (also used as image prefix)
 #   DOCKERHUB_PASSWORD      — DockerHub password or access token
 #
-# The state file (aspire-output/.dokploy-state.json) is cached between runs
-# using the GitHub Actions cache so deployments are idempotent — existing
-# Dokploy services are reused instead of recreated on every run.
+# Required GitHub Variables:
+#   DOKPLOY_ENVIRONMENT     — Target environment within the project: "production" | "staging" | "dev"
+#                             Defaults to "production" if not set.
+#
+# Idempotency: reconciliation matches existing services by appName prefix — no
+# state file needed. Re-running the workflow updates services in-place.
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Dokploy environment (overrides DOKPLOY_ENVIRONMENT variable)'
+        required: false
+        default: ''
 
 jobs:
   deploy:
@@ -35,6 +43,9 @@ jobs:
       - name: Install Aspire workload
         run: dotnet workload install aspire
 
+      - name: Install Aspire CLI
+        uses: timheuer/setup-aspire@v1
+
       - name: Log in to DockerHub
         uses: docker/login-action@v3
         with:
@@ -42,34 +53,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      # Cache the Dokploy state file so re-runs reuse existing services
-      # instead of creating duplicates. The reconciliation fallback in the
-      # library also handles a cold cache gracefully.
-      - name: Restore Dokploy state
-        uses: actions/cache@v4
-        with:
-          path: example/CosmicChimps.Aspire.AppHost/aspire-output/.dokploy-state.json
-          key: dokploy-state-${{ github.repository }}-example
-          restore-keys: dokploy-state-${{ github.repository }}-
-
-      - name: Setup Aspire CLI
-        uses: timheuer/setup-aspire@v0.1.0
-
       - name: Deploy to Dokploy
         working-directory: example/CosmicChimps.Aspire.AppHost
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
           DOCKERHUB_REGISTRY_URL: ${{ secrets.DOCKERHUB_REGISTRY_URL }}
-          DOCKERHUB_Username: ${{ secrets.DOCKERHUB_USERNAME }}
-          DockerHub__Password: ${{ secrets.DOCKERHUB_PASSWORD }}
-        run: aspire deploy
-
-      # Save updated state so the next run benefits from cached IDs.
-      # This step runs even if the deploy step fails so partial state is preserved.
-      - name: Save Dokploy state
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: example/CosmicChimps.Aspire.AppHost/aspire-output/.dokploy-state.json
-          key: dokploy-state-${{ github.repository }}-example
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+          # Environment resolution order: manual dispatch input → variable → default "production"
+          DOKPLOY_ENVIRONMENT: ${{ inputs.environment || vars.DOKPLOY_ENVIRONMENT || 'production' }}
+        run: aspire deploy --project CosmicChimps.Aspire.AppHost.csproj

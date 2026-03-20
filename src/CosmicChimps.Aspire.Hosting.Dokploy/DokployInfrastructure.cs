@@ -95,7 +95,7 @@ internal sealed class DokployInfrastructure(
         // ── 7. Build API client ───────────────────────────────────────────────
         var apiClient = BuildApiClient(resource);
 
-        // ── 8. Find or create Dokploy project + default environment ──────────
+        // ── 8. Find or create Dokploy project + named environment ────────────
         string projectId;
         string environmentId;
 
@@ -114,8 +114,15 @@ internal sealed class DokployInfrastructure(
         }
         else
         {
-            (projectId, environmentId) = await apiClient.FindOrCreateProjectAsync(
+            // Find/create project (returns default env id which we ignore)
+            (projectId, _) = await apiClient.FindOrCreateProjectAsync(
                 resource.ProjectName,
+                ct
+            );
+            // Find/create the named environment (e.g. "production", "staging")
+            environmentId = await apiClient.FindOrCreateEnvironmentAsync(
+                projectId,
+                resource.EnvironmentName,
                 ct
             );
             stateStore.SetProjectId(projectId);

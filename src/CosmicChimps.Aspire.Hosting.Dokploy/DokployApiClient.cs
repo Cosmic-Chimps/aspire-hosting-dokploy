@@ -134,6 +134,70 @@ public class DokployApiClient
     // ─── Environment ─────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Lists all environments for a given project via <c>environment.byProjectId</c>.
+    /// </summary>
+    public async Task<List<EnvironmentInfo>> GetEnvironmentsByProjectAsync(
+        string projectId,
+        CancellationToken ct = default
+    )
+    {
+        return await _client
+            .Request("api", "environment.byProjectId")
+            .SetQueryParam("projectId", projectId)
+            .GetJsonAsync<List<EnvironmentInfo>>(cancellationToken: ct)
+            ?? [];
+    }
+
+    /// <summary>
+    /// Finds an existing environment by name within a project, or creates it if not found.
+    /// Returns the <c>environmentId</c>.
+    /// </summary>
+    public async Task<string> FindOrCreateEnvironmentAsync(
+        string projectId,
+        string environmentName,
+        CancellationToken ct = default
+    )
+    {
+        var environments = await GetEnvironmentsByProjectAsync(projectId, ct);
+        var existing = environments.FirstOrDefault(e =>
+            string.Equals(e.Name, environmentName, StringComparison.OrdinalIgnoreCase)
+        );
+
+        if (existing?.EnvironmentId is not null)
+        {
+            _logger.LogInformation(
+                "Found existing Dokploy environment '{Name}' ({Id})",
+                environmentName,
+                existing.EnvironmentId
+            );
+            return existing.EnvironmentId;
+        }
+
+        _logger.LogInformation(
+            "Creating Dokploy environment '{Name}' in project '{ProjectId}'",
+            environmentName,
+            projectId
+        );
+        await _client
+            .Request("api", "environment.create")
+            .PostJsonAsync(
+                new { name = environmentName, projectId },
+                cancellationToken: ct
+            );
+
+        // Re-fetch to get the new environmentId
+        environments = await GetEnvironmentsByProjectAsync(projectId, ct);
+        var created = environments.FirstOrDefault(e =>
+            string.Equals(e.Name, environmentName, StringComparison.OrdinalIgnoreCase)
+        );
+
+        return created?.EnvironmentId
+            ?? throw new InvalidOperationException(
+                $"environment.create succeeded but '{environmentName}' not found in project '{projectId}'"
+            );
+    }
+
+    /// <summary>
     /// Fetches environment details including all embedded service lists
     /// (applications, redis, mariadb, mongo, mysql, postgres).
     /// This is the canonical way to list services — Dokploy has no separate *.all endpoints.

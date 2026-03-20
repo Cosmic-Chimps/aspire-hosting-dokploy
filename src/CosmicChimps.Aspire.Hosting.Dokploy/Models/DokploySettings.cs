@@ -22,6 +22,13 @@ public class DokploySettings
     public string ProjectName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Target environment within the Dokploy project (e.g. "production", "staging").
+    /// Created automatically if it doesn't exist within the project.
+    /// Defaults to "production".
+    /// </summary>
+    public string EnvironmentName { get; set; } = "production";
+
+    /// <summary>
     /// App name prefix used when auto-generating Dokploy app names (default: "").
     /// </summary>
     public string AppNamePrefix { get; set; } = string.Empty;

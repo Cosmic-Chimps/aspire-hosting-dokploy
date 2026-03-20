@@ -23,6 +23,13 @@ public class DokployResource : Resource
     /// </summary>
     public string ProjectName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Target environment within the Dokploy project (e.g. "production", "staging").
+    /// The environment is created automatically if it doesn't exist.
+    /// Defaults to "production".
+    /// </summary>
+    public string EnvironmentName { get; set; } = "production";
+
     /// <summary>App name prefix for all services created in Dokploy.</summary>
     public string AppNamePrefix { get; set; } = string.Empty;
 
