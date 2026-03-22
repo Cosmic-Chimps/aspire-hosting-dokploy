@@ -51,6 +51,7 @@ public class DokployApiClient
 
     public async Task<List<ProjectResponse>> GetAllProjectsAsync(CancellationToken ct = default)
     {
+        _logger.LogDebug("GET project.all");
         return await _client
                 .Request("api", "project.all")
                 .GetJsonAsync<List<ProjectResponse>>(cancellationToken: ct)
@@ -62,6 +63,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("POST project.create name={Name}", request.Name);
         var response = await _client
             .Request("api", "project.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -141,6 +143,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("GET environment.byProjectId projectId={ProjectId}", projectId);
         return await _client
             .Request("api", "environment.byProjectId")
             .SetQueryParam("projectId", projectId)
@@ -207,6 +210,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("GET environment.one environmentId={EnvironmentId}", environmentId);
         return await _client
             .Request("api", "environment.one")
             .SetQueryParam("environmentId", environmentId)
@@ -221,6 +225,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST application.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "application.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -235,6 +243,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST application.saveDockerProvider applicationId={Id} image={Image}",
+            request.ApplicationId, request.DockerImage
+        );
         await _client
             .Request("api", "application.saveDockerProvider")
             .PostJsonAsync(request, cancellationToken: ct);
@@ -245,6 +257,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST application.saveEnvironment applicationId={Id}",
+            request.ApplicationId
+        );
         await _client
             .Request("api", "application.saveEnvironment")
             .PostJsonAsync(request, cancellationToken: ct);
@@ -255,6 +271,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("POST application.deploy applicationId={Id}", request.ApplicationId);
         await _client
             .Request("api", "application.deploy")
             .PostJsonAsync(request, cancellationToken: ct);
@@ -267,6 +284,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST redis.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "redis.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -277,6 +298,7 @@ public class DokployApiClient
 
     public async Task DeployRedisAsync(DeployRedisRequest request, CancellationToken ct = default)
     {
+        _logger.LogDebug("POST redis.deploy redisId={Id}", request.RedisId);
         await _client.Request("api", "redis.deploy").PostJsonAsync(request, cancellationToken: ct);
     }
 
@@ -287,6 +309,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST mariadb.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "mariadb.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -300,6 +326,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("POST mariadb.deploy mariadbId={Id}", request.MariaDbId);
         await _client
             .Request("api", "mariadb.deploy")
             .PostJsonAsync(request, cancellationToken: ct);
@@ -312,6 +339,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST mongo.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "mongo.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -322,6 +353,7 @@ public class DokployApiClient
 
     public async Task DeployMongoAsync(DeployMongoRequest request, CancellationToken ct = default)
     {
+        _logger.LogDebug("POST mongo.deploy mongoId={Id}", request.MongoId);
         await _client.Request("api", "mongo.deploy").PostJsonAsync(request, cancellationToken: ct);
     }
 
@@ -332,6 +364,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST mysql.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "mysql.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -342,6 +378,7 @@ public class DokployApiClient
 
     public async Task DeployMySqlAsync(DeployMySqlRequest request, CancellationToken ct = default)
     {
+        _logger.LogDebug("POST mysql.deploy mysqlId={Id}", request.MySqlId);
         await _client.Request("api", "mysql.deploy").PostJsonAsync(request, cancellationToken: ct);
     }
 
@@ -352,6 +389,10 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug(
+            "POST postgres.create name={Name} appName={AppName} environmentId={EnvId}",
+            request.Name, request.AppName, request.EnvironmentId
+        );
         var response = await _client
             .Request("api", "postgres.create")
             .PostJsonAsync(request, cancellationToken: ct)
@@ -365,6 +406,7 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
+        _logger.LogDebug("POST postgres.deploy postgresId={Id}", request.PostgresId);
         await _client
             .Request("api", "postgres.deploy")
             .PostJsonAsync(request, cancellationToken: ct);
@@ -374,6 +416,10 @@ public class DokployApiClient
 
     public async Task CreateDomainAsync(CreateDomainRequest request, CancellationToken ct = default)
     {
+        _logger.LogDebug(
+            "POST domain.create host={Host} applicationId={Id}",
+            request.Host, request.ApplicationId
+        );
         await _client.Request("api", "domain.create").PostJsonAsync(request, cancellationToken: ct);
     }
 }

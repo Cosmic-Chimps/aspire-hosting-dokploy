@@ -26,6 +26,13 @@ internal sealed class DokployInfrastructure(
             resource.Name,
             resource.DokployUrl
         );
+        logger.LogDebug(
+            "Settings — project:{Project} environment:{Env} prefix:{Prefix} server:{Server}",
+            resource.ProjectName,
+            resource.EnvironmentName,
+            resource.AppNamePrefix.Length > 0 ? resource.AppNamePrefix : "(none)",
+            resource.ServerId ?? "(default)"
+        );
 
         // ── 1. Find compose YAML ──────────────────────────────────────────────
         var composeYamlPath = FindComposePath(resource);
@@ -39,9 +46,17 @@ internal sealed class DokployInfrastructure(
 
         // ── 3. Collect domain annotations (from WithDomain() calls) ──────────
         var domainAnnotations = CollectDomainAnnotations(resource);
+        if (domainAnnotations.Count > 0)
+            logger.LogDebug(
+                "Domain annotations: {Domains}",
+                string.Join(", ", domainAnnotations.Select(kv => $"{kv.Key}→{kv.Value.Host}"))
+            );
+        else
+            logger.LogDebug("No domain annotations configured");
 
         // ── 4. Parse compose into per-service descriptors ─────────────────────
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
+        logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
 
         // ── 5. Filter internal Aspire services (dashboard, etc.) ─────────────
         var servicesToDeploy = services.Where(s => !IsAspireInternalService(s)).ToList();
@@ -684,7 +699,7 @@ internal sealed class DokployInfrastructure(
         return (id, created.AppName ?? requestedAppName);
     }
 
-    private static async Task DeployNativeServiceAsync(
+    private async Task DeployNativeServiceAsync(
         DokployServiceDescriptor svc,
         string nativeId,
         DokployApiClient apiClient,
@@ -694,21 +709,26 @@ internal sealed class DokployInfrastructure(
         switch (svc.NativeServiceType)
         {
             case DokployNativeServiceType.Redis:
+                logger.LogDebug("Deploying Redis '{Service}' ({Id})", svc.Name, nativeId);
                 await apiClient.DeployRedisAsync(new DeployRedisRequest { RedisId = nativeId }, ct);
                 break;
             case DokployNativeServiceType.MariaDb:
+                logger.LogDebug("Deploying MariaDB '{Service}' ({Id})", svc.Name, nativeId);
                 await apiClient.DeployMariaDbAsync(
                     new DeployMariaDbRequest { MariaDbId = nativeId },
                     ct
                 );
                 break;
             case DokployNativeServiceType.Mongo:
+                logger.LogDebug("Deploying MongoDB '{Service}' ({Id})", svc.Name, nativeId);
                 await apiClient.DeployMongoAsync(new DeployMongoRequest { MongoId = nativeId }, ct);
                 break;
             case DokployNativeServiceType.MySql:
+                logger.LogDebug("Deploying MySQL '{Service}' ({Id})", svc.Name, nativeId);
                 await apiClient.DeployMySqlAsync(new DeployMySqlRequest { MySqlId = nativeId }, ct);
                 break;
             case DokployNativeServiceType.Postgres:
+                logger.LogDebug("Deploying Postgres '{Service}' ({Id})", svc.Name, nativeId);
                 await apiClient.DeployPostgresAsync(
                     new DeployPostgresRequest { PostgresId = nativeId },
                     ct
@@ -784,6 +804,12 @@ internal sealed class DokployInfrastructure(
         }
 
         // Save Docker image + pull credentials
+        logger.LogDebug(
+            "Saving docker provider for '{Service}': image={Image} registry={Registry}",
+            svc.Name,
+            imageToUse,
+            registry?.RegistryUrl ?? "(none)"
+        );
         await apiClient.SaveDockerProviderAsync(
             new SaveDockerProviderRequest
             {
@@ -799,6 +825,11 @@ internal sealed class DokployInfrastructure(
         // Save environment variables (with service names already substituted)
         if (!string.IsNullOrWhiteSpace(envString))
         {
+            logger.LogDebug(
+                "Saving {Lines} env var line(s) for '{Service}'",
+                envString.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length,
+                svc.Name
+            );
             await apiClient.SaveEnvironmentAsync(
                 new SaveEnvironmentRequest { ApplicationId = applicationId, Env = envString },
                 ct
@@ -864,8 +895,12 @@ internal sealed class DokployInfrastructure(
 
         foreach (var path in candidates)
         {
+            logger.LogDebug("Checking for compose YAML at: {Path}", path);
             if (File.Exists(path))
+            {
+                logger.LogDebug("Found compose YAML at: {Path}", path);
                 return path;
+            }
         }
 
         throw new FileNotFoundException(
