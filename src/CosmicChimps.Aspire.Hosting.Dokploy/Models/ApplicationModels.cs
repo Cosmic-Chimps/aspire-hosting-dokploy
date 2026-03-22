@@ -66,6 +66,18 @@ public class SaveEnvironmentRequest
     /// </summary>
     [JsonPropertyName("env")]
     public string? Env { get; set; }
+
+    /// <summary>Required by Dokploy's Zod schema — send empty string by default.</summary>
+    [JsonPropertyName("buildArgs")]
+    public string BuildArgs { get; set; } = string.Empty;
+
+    /// <summary>Required by Dokploy's Zod schema — send empty string by default.</summary>
+    [JsonPropertyName("buildSecrets")]
+    public string BuildSecrets { get; set; } = string.Empty;
+
+    /// <summary>Required by Dokploy's Zod schema — false unless caller overrides.</summary>
+    [JsonPropertyName("createEnvFile")]
+    public bool CreateEnvFile { get; set; } = false;
 }
 
 public class DeployApplicationRequest
