@@ -944,6 +944,11 @@ internal sealed class DokployInfrastructure(
             throw new InvalidOperationException(
                 $"ProjectName is not set on resource '{resource.Name}'"
             );
+        if (string.IsNullOrWhiteSpace(resource.EnvironmentName))
+            throw new InvalidOperationException(
+                $"EnvironmentName is not set on resource '{resource.Name}'. "
+                + "Set it via DokploySettings.EnvironmentName or leave unset to use the default 'production'."
+            );
     }
 }
 

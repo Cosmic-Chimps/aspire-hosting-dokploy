@@ -50,7 +50,9 @@ public static class DokployResourceExtensions
             DokployUrl = settings.DokployUrl,
             ApiToken = settings.ApiToken,
             ProjectName = settings.ProjectName,
-            EnvironmentName = settings.EnvironmentName,
+            EnvironmentName = string.IsNullOrWhiteSpace(settings.EnvironmentName)
+                ? "production"
+                : settings.EnvironmentName,
             AppNamePrefix = settings.AppNamePrefix,
             ServerId = settings.ServerId,
             Registry = settings.Registry,
