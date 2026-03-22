@@ -1,8 +1,9 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Lifecycle;
+using Aspire.Hosting.Pipelines;
 using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmicChimps.Aspire.Hosting.Dokploy;
 
@@ -42,8 +43,6 @@ public static class DokployResourceExtensions
         var settings = new DokploySettings { ProjectName = name };
         configure?.Invoke(settings);
 
-        // AddDockerComposeEnvironment resolves all service references, images, and env vars
-        // into a standard docker-compose.yaml that we then parse and push per-service.
         var composeEnv = builder.AddDockerComposeEnvironment($"{name}-compose");
 
         var dokployResource = new DokployResource(name)
@@ -58,7 +57,40 @@ public static class DokployResourceExtensions
             ComposeEnvironment = composeEnv.Resource,
         };
 
-        builder.Services.TryAddEventingSubscriber<DokployInfrastructure>();
+        // Register a pipeline step on the DokployResource that runs AFTER the compose YAML
+        // has been written (publish stage) and images have been pushed (build stage).
+        // DistributedApplicationPipeline scans all resources for PipelineStepAnnotation, so
+        // this annotation is picked up automatically during `aspire deploy`.
+#pragma warning disable ASPIREPIPELINES001
+        dokployResource.Annotations.Add(
+            new PipelineStepAnnotation(factoryContext =>
+            {
+                var step = new PipelineStep
+                {
+                    Name = $"dokploy-deploy-{name}",
+                    Description = $"Deploys Aspire app '{name}' to Dokploy.",
+                    Action = async ctx =>
+                    {
+                        var infra = new DokployInfrastructure(
+                            ctx.Services.GetRequiredService<ILogger<DokployInfrastructure>>(),
+                            ctx.Services
+                        );
+                        await infra.DeployAsync(dokployResource, ctx.CancellationToken);
+                    },
+                };
+
+                // Compose YAML is written in the "publish" stage;
+                // container images are built/pushed in the "build" stage.
+                step.DependsOn("publish");
+                step.DependsOn("build");
+
+                // Participate in the standard "deploy" aggregate step.
+                step.RequiredBy("deploy");
+
+                return step;
+            })
+        );
+#pragma warning restore ASPIREPIPELINES001
 
         return builder.AddResource(dokployResource);
     }

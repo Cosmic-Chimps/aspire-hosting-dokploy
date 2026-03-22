@@ -1,7 +1,4 @@
-using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Eventing;
-using Aspire.Hosting.Lifecycle;
 using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -9,44 +6,18 @@ using Microsoft.Extensions.Logging;
 namespace CosmicChimps.Aspire.Hosting.Dokploy;
 
 /// <summary>
-/// Aspire lifecycle subscriber that deploys each service in the app as an individual
-/// Dokploy Application or native Redis resource — one per Aspire resource.
-///
-/// Subscribes to <see cref="BeforeStartEvent"/> (same as DockerComposeInfrastructure).
-/// Because DockerComposeInfrastructure is registered first (via AddDockerComposeEnvironment),
-/// it writes the compose YAML before this subscriber runs — guaranteed by Aspire's
-/// BlockingSequential event dispatch.
+/// Encapsulates the per-service Dokploy deployment logic.
+/// Instantiated and invoked from the pipeline step registered by
+/// <see cref="DokployResourceExtensions.PublishToDokploy"/> — the step runs after the
+/// "publish" and "build" pipeline stages so that the generated docker-compose.yaml and
+/// pushed container images are both available before any API calls are made.
 /// </summary>
 internal sealed class DokployInfrastructure(
     ILogger<DokployInfrastructure> logger,
-    DistributedApplicationExecutionContext executionContext,
     IServiceProvider serviceProvider
-) : IDistributedApplicationEventingSubscriber
+)
 {
-    public Task SubscribeAsync(
-        IDistributedApplicationEventing eventing,
-        DistributedApplicationExecutionContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        eventing.Subscribe<BeforeStartEvent>(OnBeforeStartAsync);
-        return Task.CompletedTask;
-    }
-
-    private async Task OnBeforeStartAsync(BeforeStartEvent @event, CancellationToken ct = default)
-    {
-        if (executionContext.IsRunMode)
-            return;
-
-        var dokployResources = @event.Model.Resources.OfType<DokployResource>().ToArray();
-        if (dokployResources.Length == 0)
-            return;
-
-        foreach (var resource in dokployResources)
-            await DeployAsync(resource, ct);
-    }
-
-    private async Task DeployAsync(DokployResource resource, CancellationToken ct)
+    internal async Task DeployAsync(DokployResource resource, CancellationToken ct)
     {
         Validate(resource);
 
