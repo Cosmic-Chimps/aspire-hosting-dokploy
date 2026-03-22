@@ -77,7 +77,9 @@ public static class DokployResourceExtensions
                             ctx.Services.GetRequiredService<ILogger<DokployInfrastructure>>(),
                             ctx.Services
                         );
-                        await infra.DeployAsync(dokployResource, ctx.CancellationToken);
+#pragma warning disable ASPIREPIPELINES001
+                        await infra.DeployAsync(dokployResource, ctx.ReportingStep, ctx.CancellationToken);
+#pragma warning restore ASPIREPIPELINES001
                     },
                 };
 

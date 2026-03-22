@@ -1,4 +1,5 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
 using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -17,7 +18,7 @@ internal sealed class DokployInfrastructure(
     IServiceProvider serviceProvider
 )
 {
-    internal async Task DeployAsync(DokployResource resource, CancellationToken ct)
+    internal async Task DeployAsync(DokployResource resource, IReportingStep reportingStep, CancellationToken ct)
     {
         Validate(resource);
 
@@ -85,6 +86,13 @@ internal sealed class DokployInfrastructure(
         string projectId;
         string environmentId;
 
+#pragma warning disable ASPIREPIPELINES001
+        await using var setupTask = await reportingStep.CreateTaskAsync(
+            $"Setting up Dokploy project '{resource.ProjectName}' ({resource.EnvironmentName})...",
+            ct
+        );
+#pragma warning restore ASPIREPIPELINES001
+
         var savedProjectId = stateStore.GetProjectId();
         var savedEnvId = stateStore.GetEnvironmentId();
 
@@ -114,6 +122,12 @@ internal sealed class DokployInfrastructure(
             stateStore.SetProjectId(projectId);
             stateStore.SetEnvironmentId(environmentId);
         }
+
+#pragma warning disable ASPIREPIPELINES001
+        await setupTask.CompleteAsync(
+            $"Project '{resource.ProjectName}' ready (env: {resource.EnvironmentName})"
+        );
+#pragma warning restore ASPIREPIPELINES001
 
         // ── 8b. Reconcile state against live Dokploy — fills gaps if state file ──
         //       was lost (e.g. first CI run, deleted state file, new machine).
@@ -179,6 +193,17 @@ internal sealed class DokployInfrastructure(
                 )
                 : null;
 
+            var svcLabel = svc.IsNativeService
+                ? $"{svc.Name} ({svc.NativeServiceType})"
+                : $"{svc.Name}";
+
+#pragma warning disable ASPIREPIPELINES001
+            await using var svcTask = await reportingStep.CreateTaskAsync(
+                $"Deploying {svcLabel}...",
+                ct
+            );
+#pragma warning restore ASPIREPIPELINES001
+
             try
             {
                 if (svc.IsNativeService)
@@ -205,10 +230,21 @@ internal sealed class DokployInfrastructure(
                         ct
                     );
                 }
+
+                var appName = serviceNameMap[svc.Name];
+#pragma warning disable ASPIREPIPELINES001
+                await svcTask.CompleteAsync($"Deployed {svc.Name} → {appName}");
+#pragma warning restore ASPIREPIPELINES001
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to configure/deploy service '{Service}'", svc.Name);
+#pragma warning disable ASPIREPIPELINES001
+                await svcTask.CompleteAsync(
+                    $"Failed to deploy {svc.Name}: {ex.Message}",
+                    CompletionState.CompletedWithError
+                );
+#pragma warning restore ASPIREPIPELINES001
                 throw;
             }
         }
