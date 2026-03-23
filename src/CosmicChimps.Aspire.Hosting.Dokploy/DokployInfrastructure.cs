@@ -108,7 +108,6 @@ internal sealed class DokployInfrastructure(
         await ReconcileStateAsync(
             environmentId,
             servicesToDeploy,
-            resource.AppNamePrefix ?? "",
             apiClient,
             stateStore,
             ct
@@ -236,7 +235,6 @@ internal sealed class DokployInfrastructure(
     private async Task ReconcileStateAsync(
         string environmentId,
         IReadOnlyList<DokployServiceDescriptor> servicesToDeploy,
-        string appNamePrefix,
         DokployApiClient apiClient,
         DokployStateStore stateStore,
         CancellationToken ct
@@ -280,30 +278,31 @@ internal sealed class DokployInfrastructure(
 
         foreach (var svc in servicesToDeploy)
         {
-            // appName = "{prefix}{name}{randomSuffix}" e.g. "bb-keycloak-bihjcz"
-            bool MatchAppName(string? appName) =>
-                appName is not null
-                && appName.StartsWith(
-                    $"{appNamePrefix}{svc.Name}",
-                    StringComparison.OrdinalIgnoreCase
-                );
-
             bool MatchName(string? name) =>
                 string.Equals(name, svc.Name, StringComparison.OrdinalIgnoreCase);
 
             if (!svc.IsNativeService)
             {
-                var match = env.Applications.FirstOrDefault(a =>
-                    MatchAppName(a.AppName) || MatchName(a.Name)
-                );
-                if (match?.ApplicationId is not null && match.AppName is not null)
+                // environment.one does NOT include appName — match by name only,
+                // then call application.one to retrieve appName.
+                var match = env.Applications.FirstOrDefault(a => MatchName(a.Name));
+                if (match?.ApplicationId is not null)
                 {
                     stateStore.SetApplicationId(svc.Name, match.ApplicationId);
-                    stateStore.SetAppName(svc.Name, match.AppName);
-                    logger.LogInformation(
-                        "Found existing application '{Name}' → id={Id} appName={AppName}",
-                        svc.Name, match.ApplicationId, match.AppName
-                    );
+                    try
+                    {
+                        var details = await apiClient.GetApplicationAsync(match.ApplicationId, ct);
+                        var appName = details.AppName ?? match.ApplicationId;
+                        stateStore.SetAppName(svc.Name, appName);
+                        logger.LogInformation(
+                            "Found existing application '{Name}' → id={Id} appName={AppName}",
+                            svc.Name, match.ApplicationId, appName
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Could not fetch appName for application '{Name}' ({Id})", svc.Name, match.ApplicationId);
+                    }
                 }
                 else
                     logger.LogInformation("No existing application found for '{Name}' — will create", svc.Name);
@@ -314,60 +313,105 @@ internal sealed class DokployInfrastructure(
             {
                 case DokployNativeServiceType.Redis:
                 {
-                    var match = env.Redis.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
-                    if (match?.RedisId is not null && match.AppName is not null)
+                    var match = env.Redis.FirstOrDefault(r => MatchName(r.Name));
+                    if (match?.RedisId is not null)
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.RedisId);
-                        stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Found existing Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, match.AppName);
+                        try
+                        {
+                            var details = await apiClient.GetRedisAsync(match.RedisId, ct);
+                            var appName = details.AppName ?? match.RedisId;
+                            stateStore.SetAppName(svc.Name, appName);
+                            logger.LogInformation("Found existing Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, appName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Could not fetch appName for Redis '{Name}' ({Id})", svc.Name, match.RedisId);
+                        }
                     }
                     else logger.LogInformation("No existing Redis found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.MariaDb:
                 {
-                    var match = env.MariaDb.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
-                    if (match?.MariaDbId is not null && match.AppName is not null)
+                    var match = env.MariaDb.FirstOrDefault(r => MatchName(r.Name));
+                    if (match?.MariaDbId is not null)
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MariaDbId);
-                        stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Found existing MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, match.AppName);
+                        try
+                        {
+                            var details = await apiClient.GetMariaDbAsync(match.MariaDbId, ct);
+                            var appName = details.AppName ?? match.MariaDbId;
+                            stateStore.SetAppName(svc.Name, appName);
+                            logger.LogInformation("Found existing MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, appName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Could not fetch appName for MariaDB '{Name}' ({Id})", svc.Name, match.MariaDbId);
+                        }
                     }
                     else logger.LogInformation("No existing MariaDB found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.Mongo:
                 {
-                    var match = env.Mongo.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
-                    if (match?.MongoId is not null && match.AppName is not null)
+                    var match = env.Mongo.FirstOrDefault(r => MatchName(r.Name));
+                    if (match?.MongoId is not null)
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MongoId);
-                        stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Found existing MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, match.AppName);
+                        try
+                        {
+                            var details = await apiClient.GetMongoAsync(match.MongoId, ct);
+                            var appName = details.AppName ?? match.MongoId;
+                            stateStore.SetAppName(svc.Name, appName);
+                            logger.LogInformation("Found existing MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, appName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Could not fetch appName for MongoDB '{Name}' ({Id})", svc.Name, match.MongoId);
+                        }
                     }
                     else logger.LogInformation("No existing MongoDB found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.MySql:
                 {
-                    var match = env.MySql.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
-                    if (match?.MySqlId is not null && match.AppName is not null)
+                    var match = env.MySql.FirstOrDefault(r => MatchName(r.Name));
+                    if (match?.MySqlId is not null)
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MySqlId);
-                        stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Found existing MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, match.AppName);
+                        try
+                        {
+                            var details = await apiClient.GetMySqlAsync(match.MySqlId, ct);
+                            var appName = details.AppName ?? match.MySqlId;
+                            stateStore.SetAppName(svc.Name, appName);
+                            logger.LogInformation("Found existing MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, appName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Could not fetch appName for MySQL '{Name}' ({Id})", svc.Name, match.MySqlId);
+                        }
                     }
                     else logger.LogInformation("No existing MySQL found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.Postgres:
                 {
-                    var match = env.Postgres.FirstOrDefault(r => MatchAppName(r.AppName) || MatchName(r.Name));
-                    if (match?.PostgresId is not null && match.AppName is not null)
+                    var match = env.Postgres.FirstOrDefault(r => MatchName(r.Name));
+                    if (match?.PostgresId is not null)
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.PostgresId);
-                        stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Found existing Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, match.AppName);
+                        try
+                        {
+                            var details = await apiClient.GetPostgresAsync(match.PostgresId, ct);
+                            var appName = details.AppName ?? match.PostgresId;
+                            stateStore.SetAppName(svc.Name, appName);
+                            logger.LogInformation("Found existing Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, appName);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Could not fetch appName for Postgres '{Name}' ({Id})", svc.Name, match.PostgresId);
+                        }
                     }
                     else logger.LogInformation("No existing Postgres found for '{Name}' — will create", svc.Name);
                     break;

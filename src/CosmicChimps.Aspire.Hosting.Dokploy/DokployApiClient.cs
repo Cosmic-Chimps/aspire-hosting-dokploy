@@ -228,6 +228,20 @@ public class DokployApiClient
 
     // ─── Applications ────────────────────────────────────────────────────────
 
+    public async Task<ApplicationResponse> GetApplicationAsync(
+        string applicationId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET application.one applicationId={Id}", applicationId);
+        var json = await _client
+            .Request("api", "application.one")
+            .SetQueryParam("applicationId", applicationId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<ApplicationResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from application.one for '{applicationId}'");
+    }
+
     public async Task<ApplicationResponse> CreateApplicationAsync(
         CreateApplicationRequest request,
         CancellationToken ct = default
@@ -287,6 +301,20 @@ public class DokployApiClient
 
     // ─── Redis ───────────────────────────────────────────────────────────────
 
+    public async Task<RedisResponse> GetRedisAsync(
+        string redisId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET redis.one redisId={Id}", redisId);
+        var json = await _client
+            .Request("api", "redis.one")
+            .SetQueryParam("redisId", redisId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<RedisResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from redis.one for '{redisId}'");
+    }
+
     public async Task<RedisResponse> CreateRedisAsync(
         CreateRedisRequest request,
         CancellationToken ct = default
@@ -311,6 +339,20 @@ public class DokployApiClient
     }
 
     // ─── MariaDB ─────────────────────────────────────────────────────────────
+
+    public async Task<MariaDbResponse> GetMariaDbAsync(
+        string mariadbId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET mariadb.one mariadbId={Id}", mariadbId);
+        var json = await _client
+            .Request("api", "mariadb.one")
+            .SetQueryParam("mariadbId", mariadbId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<MariaDbResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from mariadb.one for '{mariadbId}'");
+    }
 
     public async Task<MariaDbResponse> CreateMariaDbAsync(
         CreateMariaDbRequest request,
@@ -342,6 +384,20 @@ public class DokployApiClient
 
     // ─── MongoDB ─────────────────────────────────────────────────────────────
 
+    public async Task<MongoResponse> GetMongoAsync(
+        string mongoId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET mongo.one mongoId={Id}", mongoId);
+        var json = await _client
+            .Request("api", "mongo.one")
+            .SetQueryParam("mongoId", mongoId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<MongoResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from mongo.one for '{mongoId}'");
+    }
+
     public async Task<MongoResponse> CreateMongoAsync(
         CreateMongoRequest request,
         CancellationToken ct = default
@@ -367,6 +423,20 @@ public class DokployApiClient
 
     // ─── MySQL ───────────────────────────────────────────────────────────────
 
+    public async Task<MySqlResponse> GetMySqlAsync(
+        string mysqlId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET mysql.one mysqlId={Id}", mysqlId);
+        var json = await _client
+            .Request("api", "mysql.one")
+            .SetQueryParam("mysqlId", mysqlId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<MySqlResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from mysql.one for '{mysqlId}'");
+    }
+
     public async Task<MySqlResponse> CreateMySqlAsync(
         CreateMySqlRequest request,
         CancellationToken ct = default
@@ -391,6 +461,20 @@ public class DokployApiClient
     }
 
     // ─── PostgreSQL ───────────────────────────────────────────────────────────
+
+    public async Task<PostgresResponse> GetPostgresAsync(
+        string postgresId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET postgres.one postgresId={Id}", postgresId);
+        var json = await _client
+            .Request("api", "postgres.one")
+            .SetQueryParam("postgresId", postgresId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<PostgresResponse>(json, JsonSerializerOptions)
+            ?? throw new InvalidOperationException($"No response from postgres.one for '{postgresId}'");
+    }
 
     public async Task<PostgresResponse> CreatePostgresAsync(
         CreatePostgresRequest request,
