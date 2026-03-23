@@ -506,6 +506,25 @@ public class DokployApiClient
 
     // ─── Domains ─────────────────────────────────────────────────────────────
 
+    public async Task<List<DomainListItem>> GetDomainsByApplicationIdAsync(
+        string applicationId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET domain.byApplicationId applicationId={Id}", applicationId);
+        var json = await _client
+            .Request("api", "domain.byApplicationId")
+            .SetQueryParam("applicationId", applicationId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<List<DomainListItem>>(json, JsonSerializerOptions) ?? [];
+    }
+
+    public async Task UpdateDomainAsync(UpdateDomainRequest request, CancellationToken ct = default)
+    {
+        _logger.LogDebug("POST domain.update domainId={Id} host={Host}", request.DomainId, request.Host);
+        await _client.Request("api", "domain.update").PostJsonAsync(request, cancellationToken: ct);
+    }
+
     public async Task CreateDomainAsync(CreateDomainRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug(

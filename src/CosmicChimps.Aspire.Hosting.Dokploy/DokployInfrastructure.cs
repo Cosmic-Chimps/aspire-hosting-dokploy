@@ -875,26 +875,51 @@ internal sealed class DokployInfrastructure(
             );
         }
 
-        // Register domain for public-facing services
+        // Register domain for public-facing services — update if already exists, create if not.
         if (svc.HasExternalEndpoint && svc.Domain is not null)
         {
             var domainAnnotation = domainAnnotations.GetValueOrDefault(svc.Name);
-            await apiClient.CreateDomainAsync(
-                new CreateDomainRequest
-                {
-                    ApplicationId = applicationId,
-                    Host = svc.Domain,
-                    Https = domainAnnotation?.Https ?? true,
-                    CertificateType = domainAnnotation?.CertificateType ?? "letsencrypt",
-                    Port = domainAnnotation?.Port,
-                },
-                ct
+            var existing = await apiClient.GetDomainsByApplicationIdAsync(applicationId, ct);
+            var existingDomain = existing.FirstOrDefault(d =>
+                string.Equals(d.Host, svc.Domain, StringComparison.OrdinalIgnoreCase)
             );
-            logger.LogInformation(
-                "Registered domain {Domain} for '{Service}'",
-                svc.Domain,
-                svc.Name
-            );
+
+            if (existingDomain?.DomainId is not null)
+            {
+                await apiClient.UpdateDomainAsync(
+                    new UpdateDomainRequest
+                    {
+                        DomainId = existingDomain.DomainId,
+                        Host = svc.Domain,
+                        Https = domainAnnotation?.Https ?? true,
+                        CertificateType = domainAnnotation?.CertificateType ?? "letsencrypt",
+                        Port = domainAnnotation?.Port,
+                    },
+                    ct
+                );
+                logger.LogInformation(
+                    "Updated domain {Domain} for '{Service}'",
+                    svc.Domain, svc.Name
+                );
+            }
+            else
+            {
+                await apiClient.CreateDomainAsync(
+                    new CreateDomainRequest
+                    {
+                        ApplicationId = applicationId,
+                        Host = svc.Domain,
+                        Https = domainAnnotation?.Https ?? true,
+                        CertificateType = domainAnnotation?.CertificateType ?? "letsencrypt",
+                        Port = domainAnnotation?.Port,
+                    },
+                    ct
+                );
+                logger.LogInformation(
+                    "Created domain {Domain} for '{Service}'",
+                    svc.Domain, svc.Name
+                );
+            }
         }
 
         logger.LogInformation("Deploying application '{Service}' ({Id})", svc.Name, applicationId);
