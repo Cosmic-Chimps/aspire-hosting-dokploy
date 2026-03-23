@@ -85,3 +85,46 @@ public class DeployApplicationRequest
     [JsonPropertyName("applicationId")]
     public required string ApplicationId { get; set; }
 }
+
+/// <summary>
+/// Docker Swarm health check configuration.
+/// All time values are in nanoseconds (1 second = 1_000_000_000 ns).
+/// </summary>
+public class HealthCheckSwarm
+{
+    /// <summary>
+    /// The test command, e.g. ["CMD", "curl", "-f", "http://localhost:8080/health"].
+    /// First element must be "CMD" or "CMD-SHELL".
+    /// </summary>
+    [JsonPropertyName("Test")]
+    public required List<string> Test { get; set; }
+
+    /// <summary>Time between health checks in nanoseconds.</summary>
+    [JsonPropertyName("Interval")]
+    public long Interval { get; set; } = 30_000_000_000L;
+
+    /// <summary>Maximum time to wait for a health check response in nanoseconds.</summary>
+    [JsonPropertyName("Timeout")]
+    public long Timeout { get; set; } = 10_000_000_000L;
+
+    /// <summary>Grace period before health checks start in nanoseconds.</summary>
+    [JsonPropertyName("StartPeriod")]
+    public long StartPeriod { get; set; } = 10_000_000_000L;
+
+    /// <summary>Number of consecutive failures before the container is considered unhealthy.</summary>
+    [JsonPropertyName("Retries")]
+    public int Retries { get; set; } = 3;
+}
+
+/// <summary>
+/// Request body for POST /api/application.update — only sets healthCheckSwarm.
+/// Other fields are omitted (WhenWritingNull) so existing values are preserved.
+/// </summary>
+public class UpdateApplicationRequest
+{
+    [JsonPropertyName("applicationId")]
+    public required string ApplicationId { get; set; }
+
+    [JsonPropertyName("healthCheckSwarm")]
+    public HealthCheckSwarm? HealthCheckSwarm { get; set; }
+}

@@ -126,15 +126,6 @@ public static class DokployResourceExtensions
         return builder.AddResource(dokployResource);
     }
 
-    /// HTTPS endpoint (via Let's Encrypt by default).
-    /// </summary>
-    /// <typeparam name="T">The resource type.</typeparam>
-    /// <param name="resourceBuilder">The resource builder.</param>
-    /// <param name="dokployBuilder">The Dokploy resource builder (returned by <see cref="PublishToDokploy"/>).</param>
-    /// <param name="host">The public hostname (e.g. <c>api.example.com</c>).</param>
-    /// <param name="https">Whether to enable HTTPS. Defaults to <c>true</c>.</param>
-    /// <param name="certificateType">Certificate type: <c>letsencrypt</c>, <c>none</c>, or <c>custom</c>. Defaults to <c>letsencrypt</c>.</param>
-    /// <param name="port">Upstream container port. Null = use the first exposed port.</param>
     public static IResourceBuilder<T> WithDokployDomain<T>(
         this IResourceBuilder<T> resourceBuilder,
         IResourceBuilder<DokployResource> dokployBuilder,
@@ -158,6 +149,56 @@ public static class DokployResourceExtensions
                     Https = https,
                     CertificateType = certificateType,
                     Port = port,
+                },
+            }
+        );
+
+        return resourceBuilder;
+    }
+
+    /// <summary>
+    /// Configures a Docker Swarm health check for this resource when deployed to Dokploy.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="resourceBuilder">The resource builder.</param>
+    /// <param name="dokployBuilder">The Dokploy resource builder (returned by <see cref="PublishToDokploy"/>).</param>
+    /// <param name="cmd">
+    /// The health check command. First element must be <c>"CMD"</c> or <c>"CMD-SHELL"</c>.
+    /// Example: <c>["CMD", "curl", "-f", "http://localhost:8080/health"]</c>
+    /// </param>
+    /// <param name="interval">Time between health checks. Defaults to 30 seconds.</param>
+    /// <param name="timeout">Maximum time to wait for a response. Defaults to 10 seconds.</param>
+    /// <param name="startPeriod">Grace period before checks begin. Defaults to 10 seconds.</param>
+    /// <param name="retries">Consecutive failures before unhealthy. Defaults to 3.</param>
+    public static IResourceBuilder<T> WithDokployHealthCheck<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        IReadOnlyList<string> cmd,
+        TimeSpan? interval = null,
+        TimeSpan? timeout = null,
+        TimeSpan? startPeriod = null,
+        int retries = 3
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+        ArgumentNullException.ThrowIfNull(cmd);
+        if (cmd.Count == 0)
+            throw new ArgumentException("cmd must have at least one element", nameof(cmd));
+
+        static long ToNs(TimeSpan ts) => (long)(ts.TotalSeconds * 1_000_000_000L);
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceHealthCheckAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                HealthCheck = new HealthCheckSwarm
+                {
+                    Test = [..cmd],
+                    Interval = ToNs(interval ?? TimeSpan.FromSeconds(30)),
+                    Timeout = ToNs(timeout ?? TimeSpan.FromSeconds(10)),
+                    StartPeriod = ToNs(startPeriod ?? TimeSpan.FromSeconds(10)),
+                    Retries = retries,
                 },
             }
         );

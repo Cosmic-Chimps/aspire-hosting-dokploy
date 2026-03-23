@@ -55,6 +55,14 @@ internal sealed class DokployInfrastructure(
         else
             logger.LogDebug("No domain annotations configured");
 
+        // ── 3b. Collect health check annotations (from WithDokployHealthCheck() calls) ─
+        var healthCheckAnnotations = CollectHealthCheckAnnotations(resource);
+        if (healthCheckAnnotations.Count > 0)
+            logger.LogDebug(
+                "Health check annotations: {Services}",
+                string.Join(", ", healthCheckAnnotations.Keys)
+            );
+
         // ── 4. Parse compose into per-service descriptors ─────────────────────
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
         logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
@@ -200,6 +208,7 @@ internal sealed class DokployInfrastructure(
                         resource,
                         apiClient,
                         domainAnnotations,
+                        healthCheckAnnotations,
                         ct
                     );
                 }
@@ -803,6 +812,7 @@ internal sealed class DokployInfrastructure(
         DokployResource resource,
         DokployApiClient apiClient,
         IReadOnlyDictionary<string, DokployDomainAnnotation> domainAnnotations,
+        IReadOnlyDictionary<string, HealthCheckSwarm> healthCheckAnnotations,
         CancellationToken ct
     )
     {
@@ -922,6 +932,28 @@ internal sealed class DokployInfrastructure(
             }
         }
 
+        // Apply Swarm health check if configured via WithDokployHealthCheck().
+        if (healthCheckAnnotations.TryGetValue(svc.Name, out var healthCheck))
+        {
+            await apiClient.UpdateApplicationAsync(
+                new UpdateApplicationRequest
+                {
+                    ApplicationId = applicationId,
+                    HealthCheckSwarm = healthCheck,
+                },
+                ct
+            );
+            logger.LogInformation(
+                "Configured health check for '{Service}': {Test} (interval={Interval}s timeout={Timeout}s startPeriod={StartPeriod}s retries={Retries})",
+                svc.Name,
+                string.Join(" ", healthCheck.Test),
+                healthCheck.Interval / 1_000_000_000,
+                healthCheck.Timeout / 1_000_000_000,
+                healthCheck.StartPeriod / 1_000_000_000,
+                healthCheck.Retries
+            );
+        }
+
         logger.LogInformation("Deploying application '{Service}' ({Id})", svc.Name, applicationId);
         await apiClient.DeployApplicationAsync(
             new DeployApplicationRequest { ApplicationId = applicationId },
@@ -1005,6 +1037,16 @@ internal sealed class DokployInfrastructure(
         return result;
     }
 
+    private static Dictionary<string, HealthCheckSwarm> CollectHealthCheckAnnotations(
+        DokployResource resource
+    )
+    {
+        var result = new Dictionary<string, HealthCheckSwarm>(StringComparer.OrdinalIgnoreCase);
+        foreach (var annotation in resource.Annotations.OfType<DokployServiceHealthCheckAnnotation>())
+            result[annotation.ServiceName] = annotation.HealthCheck;
+        return result;
+    }
+
     private static bool IsAspireInternalService(DokployServiceDescriptor svc)
     {
         if (svc.Image?.Contains("aspire-dashboard", StringComparison.OrdinalIgnoreCase) == true)
@@ -1058,4 +1100,13 @@ public class DokployServiceDomainAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
     public required DokployDomainAnnotation Domain { get; init; }
+}
+
+/// <summary>
+/// Annotation attached to a DokployResource to configure a Swarm health check for a specific service.
+/// </summary>
+public class DokployServiceHealthCheckAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+    public required HealthCheckSwarm HealthCheck { get; init; }
 }

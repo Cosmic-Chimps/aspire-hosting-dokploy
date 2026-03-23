@@ -299,6 +299,21 @@ public class DokployApiClient
             .PostJsonAsync(request, cancellationToken: ct);
     }
 
+    public async Task UpdateApplicationAsync(
+        UpdateApplicationRequest request,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug(
+            "POST application.update applicationId={Id} healthCheck={HasHealthCheck}",
+            request.ApplicationId,
+            request.HealthCheckSwarm is not null
+        );
+        await _client
+            .Request("api", "application.update")
+            .PostJsonAsync(request, cancellationToken: ct);
+    }
+
     // ─── Redis ───────────────────────────────────────────────────────────────
 
     public async Task<RedisResponse> GetRedisAsync(
