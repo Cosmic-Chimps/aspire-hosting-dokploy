@@ -63,6 +63,14 @@ internal sealed class DokployInfrastructure(
                 string.Join(", ", healthCheckAnnotations.Keys)
             );
 
+        // ── 3c. Collect no-substitution annotations (from WithDokployNoSubstitution() calls) ─
+        var noSubstitutionAnnotations = CollectNoSubstitutionAnnotations(resource);
+        if (noSubstitutionAnnotations.Count > 0)
+            logger.LogDebug(
+                "No-substitution env keys: {Keys}",
+                string.Join(", ", noSubstitutionAnnotations.SelectMany(kv => kv.Value.Select(k => $"{kv.Key}.{k}")))
+            );
+
         // ── 4. Parse compose into per-service descriptors ─────────────────────
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
         logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
@@ -166,11 +174,13 @@ internal sealed class DokployInfrastructure(
         {
             // Replace compose service names with Dokploy appNames in env values,
             // also strip lines referencing skipped services (e.g. OTEL dashboard).
+            var noSubstKeys = noSubstitutionAnnotations.TryGetValue(svc.Name, out var keys) ? keys : null;
             var envString = svc.EnvString is not null
                 ? DokployComposeParser.ApplyServiceNameSubstitution(
                     svc.EnvString,
                     serviceNameMap,
-                    skipped
+                    skipped,
+                    noSubstKeys
                 )
                 : null;
 
@@ -1047,6 +1057,21 @@ internal sealed class DokployInfrastructure(
         return result;
     }
 
+    private static Dictionary<string, IReadOnlySet<string>> CollectNoSubstitutionAnnotations(
+        DokployResource resource
+    )
+    {
+        var result = new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var annotation in resource.Annotations.OfType<DokployServiceNoSubstitutionAnnotation>())
+        {
+            if (result.TryGetValue(annotation.ServiceName, out var existing))
+                result[annotation.ServiceName] = existing.Union(annotation.EnvKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            else
+                result[annotation.ServiceName] = annotation.EnvKeys;
+        }
+        return result;
+    }
+
     private static bool IsAspireInternalService(DokployServiceDescriptor svc)
     {
         if (svc.Image?.Contains("aspire-dashboard", StringComparison.OrdinalIgnoreCase) == true)
@@ -1109,4 +1134,15 @@ public class DokployServiceHealthCheckAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
     public required HealthCheckSwarm HealthCheck { get; init; }
+}
+
+/// <summary>
+/// Annotation that marks specific env var keys as exempt from Dokploy service-name substitution.
+/// Use this for env vars whose values happen to match a resource name but are NOT hostnames
+/// (e.g. Keycloak client IDs, OAuth client names, feature flags).
+/// </summary>
+public class DokployServiceNoSubstitutionAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+    public required IReadOnlySet<string> EnvKeys { get; init; }
 }

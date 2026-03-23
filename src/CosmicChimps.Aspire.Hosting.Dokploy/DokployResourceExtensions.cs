@@ -205,5 +205,39 @@ public static class DokployResourceExtensions
 
         return resourceBuilder;
     }
+
+    /// <summary>
+    /// Marks specific environment variable keys as exempt from Dokploy's service-name substitution.
+    /// Use this for env vars whose values happen to match an Aspire resource name but are NOT
+    /// DNS hostnames — for example Keycloak client IDs, OAuth scopes, or other identifiers.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="resourceBuilder">The resource builder.</param>
+    /// <param name="dokployBuilder">The Dokploy resource builder.</param>
+    /// <param name="envVarKeys">
+    /// One or more env var key names (case-insensitive) to exclude from substitution.
+    /// Example: <c>"NUXT_PUBLIC_KEYCLOAK_CLIENT_ID"</c>
+    /// </param>
+    public static IResourceBuilder<T> WithDokployNoSubstitution<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        params string[] envVarKeys
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+        if (envVarKeys is null || envVarKeys.Length == 0)
+            throw new ArgumentException("At least one env var key must be specified.", nameof(envVarKeys));
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceNoSubstitutionAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                EnvKeys = new HashSet<string>(envVarKeys, StringComparer.OrdinalIgnoreCase),
+            }
+        );
+
+        return resourceBuilder;
+    }
 }
 

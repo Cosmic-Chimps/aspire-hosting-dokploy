@@ -100,11 +100,15 @@ public static class DokployComposeParser
     /// the actual Dokploy-assigned app names. Only replaces in the VALUE part of each line.
     /// Lines whose values reference a <paramref name="skippedServiceNames"/> hostname
     /// (e.g. the Aspire dashboard) are removed entirely.
+    /// Lines whose KEY is in <paramref name="noSubstitutionKeys"/> are kept verbatim —
+    /// use this for env vars that happen to contain a resource name but are NOT hostnames
+    /// (e.g. Keycloak client IDs, OAuth scopes, feature flag names).
     /// </summary>
     public static string ApplyServiceNameSubstitution(
         string envString,
         IReadOnlyDictionary<string, string> serviceNameMap,
-        IReadOnlyCollection<string>? skippedServiceNames = null
+        IReadOnlyCollection<string>? skippedServiceNames = null,
+        IReadOnlySet<string>? noSubstitutionKeys = null
     )
     {
         if (serviceNameMap.Count == 0 && (skippedServiceNames is null || skippedServiceNames.Count == 0))
@@ -127,6 +131,13 @@ public static class DokployComposeParser
 
             var key = line[..eqIdx];
             var value = line[(eqIdx + 1)..];
+
+            // Keep lines for exempt env var keys verbatim (no hostname substitution)
+            if (noSubstitutionKeys is not null && noSubstitutionKeys.Contains(key))
+            {
+                result.Add(line);
+                continue;
+            }
 
             // Drop lines whose values reference a skipped/filtered service hostname
             if (skippedServiceNames is not null)
