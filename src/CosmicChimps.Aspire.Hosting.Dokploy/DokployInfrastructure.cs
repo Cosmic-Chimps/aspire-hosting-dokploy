@@ -75,17 +75,13 @@ internal sealed class DokployInfrastructure(
             string.Join(", ", servicesToDeploy.Select(s => s.Name))
         );
 
-        // ── 6. Load idempotency state ─────────────────────────────────────────
-        var stateStore = new DokployStateStore(outputDir, logger);
-        await stateStore.LoadAsync(ct);
+        // ── 6. Build in-memory state store (always populated from live Dokploy below) ─
+        var stateStore = new DokployStateStore(logger);
 
         // ── 7. Build API client ───────────────────────────────────────────────
         var apiClient = BuildApiClient(resource);
 
         // ── 8. Find or create Dokploy project + named environment ────────────
-        string projectId;
-        string environmentId;
-
 #pragma warning disable ASPIREPIPELINES001
         await using var setupTask = await reportingStep.CreateTaskAsync(
             $"Setting up Dokploy project '{resource.ProjectName}' ({resource.EnvironmentName})...",
@@ -93,35 +89,13 @@ internal sealed class DokployInfrastructure(
         );
 #pragma warning restore ASPIREPIPELINES001
 
-        var savedProjectId = stateStore.GetProjectId();
-        var savedEnvId = stateStore.GetEnvironmentId();
-
-        if (savedProjectId is not null && savedEnvId is not null)
-        {
-            logger.LogInformation(
-                "Reusing saved project '{ProjectId}' / environment '{EnvId}'",
-                savedProjectId,
-                savedEnvId
-            );
-            projectId = savedProjectId;
-            environmentId = savedEnvId;
-        }
-        else
-        {
-            // Find/create project (returns default env id which we ignore)
-            (projectId, _) = await apiClient.FindOrCreateProjectAsync(
-                resource.ProjectName,
-                ct
-            );
-            // Find/create the named environment (e.g. "production", "staging")
-            environmentId = await apiClient.FindOrCreateEnvironmentAsync(
-                projectId,
-                resource.EnvironmentName,
-                ct
-            );
-            stateStore.SetProjectId(projectId);
-            stateStore.SetEnvironmentId(environmentId);
-        }
+        // Always look up project and environment from Dokploy (no local state file).
+        var (projectId, _) = await apiClient.FindOrCreateProjectAsync(resource.ProjectName, ct);
+        var environmentId = await apiClient.FindOrCreateEnvironmentAsync(
+            projectId,
+            resource.EnvironmentName,
+            ct
+        );
 
 #pragma warning disable ASPIREPIPELINES001
         await setupTask.CompleteAsync(
@@ -129,8 +103,8 @@ internal sealed class DokployInfrastructure(
         );
 #pragma warning restore ASPIREPIPELINES001
 
-        // ── 8b. Reconcile state against live Dokploy — fills gaps if state file ──
-        //       was lost (e.g. first CI run, deleted state file, new machine).
+        // ── 8b. Always load live service IDs from Dokploy ────────────────────
+        //       No local state file — idempotency is driven by querying the live API.
         await ReconcileStateAsync(
             environmentId,
             servicesToDeploy,
@@ -249,17 +223,15 @@ internal sealed class DokployInfrastructure(
             }
         }
 
-        // ── 11. Persist state ─────────────────────────────────────────────────
-        await stateStore.SaveAsync(ct);
         logger.LogInformation("Dokploy deployment complete for '{Name}'", resource.Name);
     }
 
     // ── Pass 1: Create services ───────────────────────────────────────────────
 
     /// <summary>
-    /// Queries Dokploy for all existing services via <c>environment.one</c> and backfills any
-    /// entries missing from local state. Makes deployment idempotent even when the state file
-    /// has been lost. Matches by <c>appName.StartsWith("{prefix}{serviceName}")</c>.
+    /// Queries Dokploy for all existing services via <c>environment.one</c> and populates
+    /// the in-memory state store with their IDs. Called on every run — there is no local
+    /// state file, so Dokploy is always the source of truth.
     /// </summary>
     private async Task ReconcileStateAsync(
         string environmentId,
@@ -270,25 +242,9 @@ internal sealed class DokployInfrastructure(
         CancellationToken ct
     )
     {
-        // Fast path: if every service already has IDs in local state, skip the API call.
-        var missingServices = servicesToDeploy
-            .Where(svc =>
-                svc.IsNativeService
-                    ? stateStore.GetNativeServiceId(svc.Name) is null
-                    : stateStore.GetApplicationId(svc.Name) is null
-            )
-            .ToList();
-
-        if (missingServices.Count == 0)
-        {
-            logger.LogDebug("All services found in local state — skipping Dokploy reconciliation");
-            return;
-        }
-
         logger.LogInformation(
-            "State missing for {Count} service(s) — querying Dokploy to reconcile: {Names}",
-            missingServices.Count,
-            string.Join(", ", missingServices.Select(s => s.Name))
+            "Loading live service state from Dokploy (environmentId={EnvId})...",
+            environmentId
         );
 
         // Single call: environment.one returns ALL service lists embedded.
@@ -299,11 +255,14 @@ internal sealed class DokployInfrastructure(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not fetch environment from Dokploy — will create fresh");
+            logger.LogError(
+                ex,
+                "Failed to query Dokploy environment state — services will be created fresh (duplicates possible)"
+            );
             return;
         }
 
-        logger.LogDebug(
+        logger.LogInformation(
             "Dokploy live counts — apps:{Apps} redis:{Redis} mariadb:{MariaDb} mongo:{Mongo} mysql:{MySql} postgres:{Postgres}",
             env.Applications.Count,
             env.Redis.Count,
@@ -319,9 +278,9 @@ internal sealed class DokployInfrastructure(
                 string.Join(", ", env.Applications.Select(a => $"{a.Name}|{a.AppName}"))
             );
 
-        foreach (var svc in missingServices)
+        foreach (var svc in servicesToDeploy)
         {
-            // appName = "{prefix}{name}{randomSuffix}" e.g. "da-seq-bihjcz"
+            // appName = "{prefix}{name}{randomSuffix}" e.g. "bb-keycloak-bihjcz"
             bool MatchAppName(string? appName) =>
                 appName is not null
                 && appName.StartsWith(
@@ -342,12 +301,12 @@ internal sealed class DokployInfrastructure(
                     stateStore.SetApplicationId(svc.Name, match.ApplicationId);
                     stateStore.SetAppName(svc.Name, match.AppName);
                     logger.LogInformation(
-                        "Reconciled application '{Name}' → id={Id} appName={AppName}",
+                        "Found existing application '{Name}' → id={Id} appName={AppName}",
                         svc.Name, match.ApplicationId, match.AppName
                     );
                 }
                 else
-                    logger.LogDebug("No existing application found for '{Name}' — will create", svc.Name);
+                    logger.LogInformation("No existing application found for '{Name}' — will create", svc.Name);
                 continue;
             }
 
@@ -360,9 +319,9 @@ internal sealed class DokployInfrastructure(
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.RedisId);
                         stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Reconciled Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, match.AppName);
+                        logger.LogInformation("Found existing Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, match.AppName);
                     }
-                    else logger.LogDebug("No existing Redis found for '{Name}' — will create", svc.Name);
+                    else logger.LogInformation("No existing Redis found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.MariaDb:
@@ -372,9 +331,9 @@ internal sealed class DokployInfrastructure(
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MariaDbId);
                         stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Reconciled MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, match.AppName);
+                        logger.LogInformation("Found existing MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, match.AppName);
                     }
-                    else logger.LogDebug("No existing MariaDB found for '{Name}' — will create", svc.Name);
+                    else logger.LogInformation("No existing MariaDB found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.Mongo:
@@ -384,9 +343,9 @@ internal sealed class DokployInfrastructure(
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MongoId);
                         stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Reconciled MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, match.AppName);
+                        logger.LogInformation("Found existing MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, match.AppName);
                     }
-                    else logger.LogDebug("No existing MongoDB found for '{Name}' — will create", svc.Name);
+                    else logger.LogInformation("No existing MongoDB found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.MySql:
@@ -396,9 +355,9 @@ internal sealed class DokployInfrastructure(
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.MySqlId);
                         stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Reconciled MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, match.AppName);
+                        logger.LogInformation("Found existing MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, match.AppName);
                     }
-                    else logger.LogDebug("No existing MySQL found for '{Name}' — will create", svc.Name);
+                    else logger.LogInformation("No existing MySQL found for '{Name}' — will create", svc.Name);
                     break;
                 }
                 case DokployNativeServiceType.Postgres:
@@ -408,9 +367,9 @@ internal sealed class DokployInfrastructure(
                     {
                         stateStore.SetNativeServiceId(svc.Name, match.PostgresId);
                         stateStore.SetAppName(svc.Name, match.AppName);
-                        logger.LogInformation("Reconciled Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, match.AppName);
+                        logger.LogInformation("Found existing Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, match.AppName);
                     }
-                    else logger.LogDebug("No existing Postgres found for '{Name}' — will create", svc.Name);
+                    else logger.LogInformation("No existing Postgres found for '{Name}' — will create", svc.Name);
                     break;
                 }
             }
