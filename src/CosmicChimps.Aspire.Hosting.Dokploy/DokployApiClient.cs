@@ -17,6 +17,7 @@ public class DokployApiClient
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DictionaryKeyPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly FlurlClient _client;
@@ -211,10 +212,17 @@ public class DokployApiClient
     )
     {
         _logger.LogDebug("GET environment.one environmentId={EnvironmentId}", environmentId);
-        return await _client
+        var rawJson = await _client
             .Request("api", "environment.one")
             .SetQueryParam("environmentId", environmentId)
-            .GetJsonAsync<EnvironmentOneResponse>(cancellationToken: ct)
+            .GetStringAsync(cancellationToken: ct);
+
+        _logger.LogDebug(
+            "environment.one response (first 500 chars): {Response}",
+            rawJson.Length > 500 ? rawJson[..500] : rawJson
+        );
+
+        return JsonSerializer.Deserialize<EnvironmentOneResponse>(rawJson, JsonSerializerOptions)
             ?? new EnvironmentOneResponse();
     }
 

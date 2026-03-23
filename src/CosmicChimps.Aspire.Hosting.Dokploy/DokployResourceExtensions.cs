@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
@@ -92,6 +93,32 @@ public static class DokployResourceExtensions
                 step.RequiredBy("deploy");
 
                 return step;
+            })
+        );
+#pragma warning restore ASPIREPIPELINES001
+
+        // Disable the built-in docker-compose-up step that DockerComposeEnvironmentResource
+        // always registers. When Dokploy is the deployment target, there is no local Docker
+        // daemon to run `docker compose up` against — Dokploy handles service startup itself.
+        // We use reflection to swap the action with a no-op because PipelineStep.Action has
+        // an `init` accessor (enforced by C# compiler only, not by the CLR).
+#pragma warning disable ASPIREPIPELINES001
+        dokployResource.Annotations.Add(
+            new PipelineConfigurationAnnotation(ctx =>
+            {
+                var composeUpStepName = $"docker-compose-up-{name}-compose";
+                var composeUpStep = ctx.Steps.FirstOrDefault(s => s.Name == composeUpStepName);
+                if (composeUpStep is not null)
+                {
+                    typeof(PipelineStep)
+                        .GetProperty(nameof(PipelineStep.Action))!
+                        .SetValue(
+                            composeUpStep,
+                            (Func<PipelineStepContext, Task>)(_ => Task.CompletedTask)
+                        );
+                }
+
+                return Task.CompletedTask;
             })
         );
 #pragma warning restore ASPIREPIPELINES001
