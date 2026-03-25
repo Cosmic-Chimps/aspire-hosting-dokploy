@@ -26,10 +26,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Docker" Version="13.1.3-preview.1.26166.8" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.2.0" />
     <PackageReference Include="Flurl.Http" Version="4.0.2" />
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.201" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
