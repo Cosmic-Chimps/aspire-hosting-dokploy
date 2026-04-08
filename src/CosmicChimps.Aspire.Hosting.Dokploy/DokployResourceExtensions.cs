@@ -57,6 +57,7 @@ public static class DokployResourceExtensions
             AppNamePrefix = settings.AppNamePrefix,
             ServerId = settings.ServerId,
             Registry = settings.Registry,
+            DeployBypassToken = settings.DeployBypassToken,
             ComposeEnvironment = composeEnv.Resource,
         };
 

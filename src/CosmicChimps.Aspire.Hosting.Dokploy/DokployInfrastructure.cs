@@ -980,6 +980,8 @@ internal sealed class DokployInfrastructure(
         var http = factory.CreateClient();
         http.BaseAddress = new Uri(resource.DokployUrl);
         http.DefaultRequestHeaders.Add("x-api-key", resource.ApiToken);
+        if (!string.IsNullOrWhiteSpace(resource.DeployBypassToken))
+            http.DefaultRequestHeaders.Add("X-Deploy-Token", resource.DeployBypassToken);
 
         var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
         return new DokployApiClient(http, loggerFactory.CreateLogger<DokployApiClient>());

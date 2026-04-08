@@ -40,6 +40,15 @@ public class DokployResource : Resource
     public Models.RegistryCredentials? Registry { get; set; }
 
     /// <summary>
+    /// Optional secret token sent as <c>X-Deploy-Token</c> on every API request.
+    /// Configure your reverse proxy / WAF in front of the Dokploy VPS to bypass
+    /// bot protection or rate limiting when this header is present.
+    /// Works with Cloudflare (WAF Custom Rule), Nginx, Traefik, Caddy, HAProxy, etc.
+    /// Store the value in a CI secret and pass it via <see cref="DokploySettings.DeployBypassToken"/>.
+    /// </summary>
+    public string? DeployBypassToken { get; set; }
+
+    /// <summary>
     /// The Docker Compose environment resource that generates the resolved YAML.
     /// Set by DokployResourceExtensions.
     /// </summary>

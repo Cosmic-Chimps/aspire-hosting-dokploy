@@ -40,6 +40,15 @@ public class DokploySettings
     public string? ServerId { get; set; }
 
     /// <summary>
+    /// Optional secret token sent as <c>X-Deploy-Token</c> on every API request.
+    /// Configure your reverse proxy / WAF in front of the Dokploy VPS to bypass
+    /// bot protection or rate limiting when this header is present.
+    /// Works with Cloudflare (WAF Custom Rule), Nginx, Traefik, Caddy, HAProxy, etc.
+    /// Store the value in a CI secret and pass it via this setting.
+    /// </summary>
+    public string? DeployBypassToken { get; set; }
+
+    /// <summary>
     /// Optional registry credentials applied to all application services.
     /// Can be overridden per-service via WithRegistryCredentials().
     /// </summary>
