@@ -33,6 +33,9 @@ public class ApplicationResponse
 
     [JsonPropertyName("applicationStatus")]
     public string? ApplicationStatus { get; set; }
+
+    [JsonPropertyName("env")]
+    public string? Env { get; set; }
 }
 
 /// <summary>Item returned by application.all — same shape as ApplicationResponse.</summary>

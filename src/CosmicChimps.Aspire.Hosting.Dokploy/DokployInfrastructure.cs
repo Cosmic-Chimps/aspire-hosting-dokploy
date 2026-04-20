@@ -881,16 +881,22 @@ internal sealed class DokployInfrastructure(
             ct
         );
 
-        // Save environment variables (with service names already substituted)
+        // Save environment variables (with service names already substituted).
+        // Strategy: MERGE with existing Dokploy env vars so manually-set values
+        // (e.g. Stripe keys, cloud function URLs set outside of Aspire) are preserved.
+        // Aspire-provided keys always win; Dokploy-only keys are kept as-is.
         if (!string.IsNullOrWhiteSpace(envString))
         {
+            var mergedEnvString = await MergeWithExistingEnvAsync(
+                applicationId, envString, apiClient, svc.Name, ct);
+
             logger.LogDebug(
                 "Saving {Lines} env var line(s) for '{Service}'",
-                envString.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length,
+                mergedEnvString.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length,
                 svc.Name
             );
             await apiClient.SaveEnvironmentAsync(
-                new SaveEnvironmentRequest { ApplicationId = applicationId, Env = envString },
+                new SaveEnvironmentRequest { ApplicationId = applicationId, Env = mergedEnvString },
                 ct
             );
         }
@@ -1081,6 +1087,76 @@ internal sealed class DokployInfrastructure(
         if (svc.Name.EndsWith("-dashboard", StringComparison.OrdinalIgnoreCase))
             return true;
         return false;
+    }
+
+    /// <summary>
+    /// Merges Aspire-generated env vars with the existing env vars already saved in Dokploy.
+    /// Aspire's values win for any key they provide; keys that only exist in Dokploy are preserved.
+    /// This ensures manually-set values (e.g. Stripe keys, cloud function URLs) survive re-deploys.
+    /// </summary>
+    private async Task<string> MergeWithExistingEnvAsync(
+        string applicationId,
+        string aspireEnvString,
+        DokployApiClient apiClient,
+        string serviceName,
+        CancellationToken ct)
+    {
+        string? existingEnv = null;
+        try
+        {
+            var app = await apiClient.GetApplicationAsync(applicationId, ct);
+            existingEnv = app.Env;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                "Could not fetch existing env vars for '{Service}' — will overwrite: {Message}",
+                serviceName, ex.Message);
+        }
+
+        if (string.IsNullOrWhiteSpace(existingEnv))
+            return aspireEnvString;
+
+        // Parse existing Dokploy env vars into a dict (preserves order, last-wins on duplicates)
+        var existing = ParseEnvString(existingEnv);
+
+        // Parse Aspire env vars — these override existing values
+        var aspire = ParseEnvString(aspireEnvString);
+
+        // Merge: start with existing, overwrite/add Aspire keys
+        foreach (var (key, value) in aspire)
+            existing[key] = value;
+
+        var merged = string.Join('\n', existing.Select(kv => $"{kv.Key}={kv.Value}"));
+
+        var preservedCount = existing.Count - aspire.Count;
+        if (preservedCount > 0)
+        {
+            logger.LogInformation(
+                "Merged env vars for '{Service}': {Aspire} from Aspire + {Preserved} preserved from Dokploy",
+                serviceName, aspire.Count, preservedCount);
+        }
+
+        return merged;
+    }
+
+    private static Dictionary<string, string> ParseEnvString(string envString)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in envString.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed.StartsWith('#'))
+                continue;
+            var idx = trimmed.IndexOf('=');
+            if (idx <= 0)
+                continue;
+            var key = trimmed[..idx].Trim();
+            var value = trimmed[(idx + 1)..]; // don't trim value — it may be intentionally padded
+            if (!string.IsNullOrEmpty(key))
+                result[key] = value;
+        }
+        return result;
     }
 
     private static string? ExtractEnvValue(string? envString, string key)
