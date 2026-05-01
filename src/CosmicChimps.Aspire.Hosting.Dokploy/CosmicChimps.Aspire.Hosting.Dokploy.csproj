@@ -29,7 +29,11 @@
     <PackageReference Include="Aspire.Hosting.Docker" Version="13.2.4" />
     <PackageReference Include="Flurl.Http" Version="4.0.2" />
     <PackageReference Include="YamlDotNet" Version="17.0.1" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.203" PrivateAssets="all" />
+    <PackageReference
+      Include="Microsoft.SourceLink.GitHub"
+      Version="10.0.203"
+      PrivateAssets="all"
+    />
   </ItemGroup>
 
   <ItemGroup>

@@ -18,7 +18,11 @@ internal sealed class DokployInfrastructure(
     IServiceProvider serviceProvider
 )
 {
-    internal async Task DeployAsync(DokployResource resource, IReportingStep reportingStep, CancellationToken ct)
+    internal async Task DeployAsync(
+        DokployResource resource,
+        IReportingStep reportingStep,
+        CancellationToken ct
+    )
     {
         Validate(resource);
 
@@ -68,7 +72,12 @@ internal sealed class DokployInfrastructure(
         if (noSubstitutionAnnotations.Count > 0)
             logger.LogDebug(
                 "No-substitution env keys: {Keys}",
-                string.Join(", ", noSubstitutionAnnotations.SelectMany(kv => kv.Value.Select(k => $"{kv.Key}.{k}")))
+                string.Join(
+                    ", ",
+                    noSubstitutionAnnotations.SelectMany(kv =>
+                        kv.Value.Select(k => $"{kv.Key}.{k}")
+                    )
+                )
             );
 
         // ── 4. Parse compose into per-service descriptors ─────────────────────
@@ -121,13 +130,7 @@ internal sealed class DokployInfrastructure(
 
         // ── 8b. Always load live service IDs from Dokploy ────────────────────
         //       No local state file — idempotency is driven by querying the live API.
-        await ReconcileStateAsync(
-            environmentId,
-            servicesToDeploy,
-            apiClient,
-            stateStore,
-            ct
-        );
+        await ReconcileStateAsync(environmentId, servicesToDeploy, apiClient, stateStore, ct);
 
         // ── 9. PASS 1: Create all services, collect composeName → appName map ─
         //    We must do this before setting env vars because each service's env
@@ -174,7 +177,9 @@ internal sealed class DokployInfrastructure(
         {
             // Replace compose service names with Dokploy appNames in env values,
             // also strip lines referencing skipped services (e.g. OTEL dashboard).
-            var noSubstKeys = noSubstitutionAnnotations.TryGetValue(svc.Name, out var keys) ? keys : null;
+            var noSubstKeys = noSubstitutionAnnotations.TryGetValue(svc.Name, out var keys)
+                ? keys
+                : null;
             var envString = svc.EnvString is not null
                 ? DokployComposeParser.ApplyServiceNameSubstitution(
                     svc.EnvString,
@@ -315,16 +320,26 @@ internal sealed class DokployInfrastructure(
                         stateStore.SetAppName(svc.Name, appName);
                         logger.LogInformation(
                             "Found existing application '{Name}' → id={Id} appName={AppName}",
-                            svc.Name, match.ApplicationId, appName
+                            svc.Name,
+                            match.ApplicationId,
+                            appName
                         );
                     }
                     catch (Exception ex)
                     {
-                        logger.LogWarning(ex, "Could not fetch appName for application '{Name}' ({Id})", svc.Name, match.ApplicationId);
+                        logger.LogWarning(
+                            ex,
+                            "Could not fetch appName for application '{Name}' ({Id})",
+                            svc.Name,
+                            match.ApplicationId
+                        );
                     }
                 }
                 else
-                    logger.LogInformation("No existing application found for '{Name}' — will create", svc.Name);
+                    logger.LogInformation(
+                        "No existing application found for '{Name}' — will create",
+                        svc.Name
+                    );
                 continue;
             }
 
@@ -341,14 +356,28 @@ internal sealed class DokployInfrastructure(
                             var details = await apiClient.GetRedisAsync(match.RedisId, ct);
                             var appName = details.AppName ?? match.RedisId;
                             stateStore.SetAppName(svc.Name, appName);
-                            logger.LogInformation("Found existing Redis '{Name}' → id={Id} appName={AppName}", svc.Name, match.RedisId, appName);
+                            logger.LogInformation(
+                                "Found existing Redis '{Name}' → id={Id} appName={AppName}",
+                                svc.Name,
+                                match.RedisId,
+                                appName
+                            );
                         }
                         catch (Exception ex)
                         {
-                            logger.LogWarning(ex, "Could not fetch appName for Redis '{Name}' ({Id})", svc.Name, match.RedisId);
+                            logger.LogWarning(
+                                ex,
+                                "Could not fetch appName for Redis '{Name}' ({Id})",
+                                svc.Name,
+                                match.RedisId
+                            );
                         }
                     }
-                    else logger.LogInformation("No existing Redis found for '{Name}' — will create", svc.Name);
+                    else
+                        logger.LogInformation(
+                            "No existing Redis found for '{Name}' — will create",
+                            svc.Name
+                        );
                     break;
                 }
                 case DokployNativeServiceType.MariaDb:
@@ -362,14 +391,28 @@ internal sealed class DokployInfrastructure(
                             var details = await apiClient.GetMariaDbAsync(match.MariaDbId, ct);
                             var appName = details.AppName ?? match.MariaDbId;
                             stateStore.SetAppName(svc.Name, appName);
-                            logger.LogInformation("Found existing MariaDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MariaDbId, appName);
+                            logger.LogInformation(
+                                "Found existing MariaDB '{Name}' → id={Id} appName={AppName}",
+                                svc.Name,
+                                match.MariaDbId,
+                                appName
+                            );
                         }
                         catch (Exception ex)
                         {
-                            logger.LogWarning(ex, "Could not fetch appName for MariaDB '{Name}' ({Id})", svc.Name, match.MariaDbId);
+                            logger.LogWarning(
+                                ex,
+                                "Could not fetch appName for MariaDB '{Name}' ({Id})",
+                                svc.Name,
+                                match.MariaDbId
+                            );
                         }
                     }
-                    else logger.LogInformation("No existing MariaDB found for '{Name}' — will create", svc.Name);
+                    else
+                        logger.LogInformation(
+                            "No existing MariaDB found for '{Name}' — will create",
+                            svc.Name
+                        );
                     break;
                 }
                 case DokployNativeServiceType.Mongo:
@@ -383,14 +426,28 @@ internal sealed class DokployInfrastructure(
                             var details = await apiClient.GetMongoAsync(match.MongoId, ct);
                             var appName = details.AppName ?? match.MongoId;
                             stateStore.SetAppName(svc.Name, appName);
-                            logger.LogInformation("Found existing MongoDB '{Name}' → id={Id} appName={AppName}", svc.Name, match.MongoId, appName);
+                            logger.LogInformation(
+                                "Found existing MongoDB '{Name}' → id={Id} appName={AppName}",
+                                svc.Name,
+                                match.MongoId,
+                                appName
+                            );
                         }
                         catch (Exception ex)
                         {
-                            logger.LogWarning(ex, "Could not fetch appName for MongoDB '{Name}' ({Id})", svc.Name, match.MongoId);
+                            logger.LogWarning(
+                                ex,
+                                "Could not fetch appName for MongoDB '{Name}' ({Id})",
+                                svc.Name,
+                                match.MongoId
+                            );
                         }
                     }
-                    else logger.LogInformation("No existing MongoDB found for '{Name}' — will create", svc.Name);
+                    else
+                        logger.LogInformation(
+                            "No existing MongoDB found for '{Name}' — will create",
+                            svc.Name
+                        );
                     break;
                 }
                 case DokployNativeServiceType.MySql:
@@ -404,14 +461,28 @@ internal sealed class DokployInfrastructure(
                             var details = await apiClient.GetMySqlAsync(match.MySqlId, ct);
                             var appName = details.AppName ?? match.MySqlId;
                             stateStore.SetAppName(svc.Name, appName);
-                            logger.LogInformation("Found existing MySQL '{Name}' → id={Id} appName={AppName}", svc.Name, match.MySqlId, appName);
+                            logger.LogInformation(
+                                "Found existing MySQL '{Name}' → id={Id} appName={AppName}",
+                                svc.Name,
+                                match.MySqlId,
+                                appName
+                            );
                         }
                         catch (Exception ex)
                         {
-                            logger.LogWarning(ex, "Could not fetch appName for MySQL '{Name}' ({Id})", svc.Name, match.MySqlId);
+                            logger.LogWarning(
+                                ex,
+                                "Could not fetch appName for MySQL '{Name}' ({Id})",
+                                svc.Name,
+                                match.MySqlId
+                            );
                         }
                     }
-                    else logger.LogInformation("No existing MySQL found for '{Name}' — will create", svc.Name);
+                    else
+                        logger.LogInformation(
+                            "No existing MySQL found for '{Name}' — will create",
+                            svc.Name
+                        );
                     break;
                 }
                 case DokployNativeServiceType.Postgres:
@@ -425,14 +496,28 @@ internal sealed class DokployInfrastructure(
                             var details = await apiClient.GetPostgresAsync(match.PostgresId, ct);
                             var appName = details.AppName ?? match.PostgresId;
                             stateStore.SetAppName(svc.Name, appName);
-                            logger.LogInformation("Found existing Postgres '{Name}' → id={Id} appName={AppName}", svc.Name, match.PostgresId, appName);
+                            logger.LogInformation(
+                                "Found existing Postgres '{Name}' → id={Id} appName={AppName}",
+                                svc.Name,
+                                match.PostgresId,
+                                appName
+                            );
                         }
                         catch (Exception ex)
                         {
-                            logger.LogWarning(ex, "Could not fetch appName for Postgres '{Name}' ({Id})", svc.Name, match.PostgresId);
+                            logger.LogWarning(
+                                ex,
+                                "Could not fetch appName for Postgres '{Name}' ({Id})",
+                                svc.Name,
+                                match.PostgresId
+                            );
                         }
                     }
-                    else logger.LogInformation("No existing Postgres found for '{Name}' — will create", svc.Name);
+                    else
+                        logger.LogInformation(
+                            "No existing Postgres found for '{Name}' — will create",
+                            svc.Name
+                        );
                     break;
                 }
             }
@@ -654,6 +739,8 @@ internal sealed class DokployInfrastructure(
                 AppName = requestedAppName,
                 EnvironmentId = environmentId,
                 DatabasePassword = password,
+                DatabaseName = ExtractEnvValue(svc.EnvString, "MARIADB_DATABASE") ?? svc.Name,
+                DatabaseUser = ExtractEnvValue(svc.EnvString, "MARIADB_USER") ?? "mariadb",
                 DockerImage = svc.Image,
                 ServerId = resource.ServerId,
             },
@@ -714,6 +801,8 @@ internal sealed class DokployInfrastructure(
                 AppName = requestedAppName,
                 EnvironmentId = environmentId,
                 DatabasePassword = password,
+                DatabaseName = ExtractEnvValue(svc.EnvString, "MYSQL_DATABASE") ?? svc.Name,
+                DatabaseUser = ExtractEnvValue(svc.EnvString, "MYSQL_USER") ?? "mysql",
                 DockerImage = svc.Image,
                 ServerId = resource.ServerId,
             },
@@ -744,6 +833,8 @@ internal sealed class DokployInfrastructure(
                 AppName = requestedAppName,
                 EnvironmentId = environmentId,
                 DatabasePassword = password,
+                DatabaseName = ExtractEnvValue(svc.EnvString, "POSTGRES_DB") ?? svc.Name,
+                DatabaseUser = ExtractEnvValue(svc.EnvString, "POSTGRES_USER") ?? "postgres",
                 DockerImage = svc.Image,
                 ServerId = resource.ServerId,
             },
@@ -888,7 +979,12 @@ internal sealed class DokployInfrastructure(
         if (!string.IsNullOrWhiteSpace(envString))
         {
             var mergedEnvString = await MergeWithExistingEnvAsync(
-                applicationId, envString, apiClient, svc.Name, ct);
+                applicationId,
+                envString,
+                apiClient,
+                svc.Name,
+                ct
+            );
 
             logger.LogDebug(
                 "Saving {Lines} env var line(s) for '{Service}'",
@@ -925,7 +1021,8 @@ internal sealed class DokployInfrastructure(
                 );
                 logger.LogInformation(
                     "Updated domain {Domain} for '{Service}'",
-                    svc.Domain, svc.Name
+                    svc.Domain,
+                    svc.Name
                 );
             }
             else
@@ -943,7 +1040,8 @@ internal sealed class DokployInfrastructure(
                 );
                 logger.LogInformation(
                     "Created domain {Domain} for '{Service}'",
-                    svc.Domain, svc.Name
+                    svc.Domain,
+                    svc.Name
                 );
             }
         }
@@ -1060,7 +1158,9 @@ internal sealed class DokployInfrastructure(
     )
     {
         var result = new Dictionary<string, HealthCheckSwarm>(StringComparer.OrdinalIgnoreCase);
-        foreach (var annotation in resource.Annotations.OfType<DokployServiceHealthCheckAnnotation>())
+        foreach (
+            var annotation in resource.Annotations.OfType<DokployServiceHealthCheckAnnotation>()
+        )
             result[annotation.ServiceName] = annotation.HealthCheck;
         return result;
     }
@@ -1070,10 +1170,14 @@ internal sealed class DokployInfrastructure(
     )
     {
         var result = new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var annotation in resource.Annotations.OfType<DokployServiceNoSubstitutionAnnotation>())
+        foreach (
+            var annotation in resource.Annotations.OfType<DokployServiceNoSubstitutionAnnotation>()
+        )
         {
             if (result.TryGetValue(annotation.ServiceName, out var existing))
-                result[annotation.ServiceName] = existing.Union(annotation.EnvKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                result[annotation.ServiceName] = existing
+                    .Union(annotation.EnvKeys)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
             else
                 result[annotation.ServiceName] = annotation.EnvKeys;
         }
@@ -1099,7 +1203,8 @@ internal sealed class DokployInfrastructure(
         string aspireEnvString,
         DokployApiClient apiClient,
         string serviceName,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         string? existingEnv = null;
         try
@@ -1111,7 +1216,9 @@ internal sealed class DokployInfrastructure(
         {
             logger.LogWarning(
                 "Could not fetch existing env vars for '{Service}' — will overwrite: {Message}",
-                serviceName, ex.Message);
+                serviceName,
+                ex.Message
+            );
         }
 
         if (string.IsNullOrWhiteSpace(existingEnv))
@@ -1134,7 +1241,10 @@ internal sealed class DokployInfrastructure(
         {
             logger.LogInformation(
                 "Merged env vars for '{Service}': {Aspire} from Aspire + {Preserved} preserved from Dokploy",
-                serviceName, aspire.Count, preservedCount);
+                serviceName,
+                aspire.Count,
+                preservedCount
+            );
         }
 
         return merged;
@@ -1191,7 +1301,7 @@ internal sealed class DokployInfrastructure(
         if (string.IsNullOrWhiteSpace(resource.EnvironmentName))
             throw new InvalidOperationException(
                 $"EnvironmentName is not set on resource '{resource.Name}'. "
-                + "Set it via DokploySettings.EnvironmentName or leave unset to use the default 'production'."
+                    + "Set it via DokploySettings.EnvironmentName or leave unset to use the default 'production'."
             );
     }
 }
