@@ -1073,6 +1073,47 @@ internal sealed class DokployInfrastructure(
             new DeployApplicationRequest { ApplicationId = applicationId },
             ct
         );
+
+        // Configure persistent volume mounts (idempotent — skips if already exists).
+        var mountAnnotations = resource.Annotations
+            .OfType<DokployServiceMountAnnotation>()
+            .Where(a => string.Equals(a.ServiceName, svc.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (mountAnnotations.Count > 0)
+        {
+            var existingMounts = await apiClient.GetMountsByApplicationIdAsync(applicationId, ct);
+            var existingPaths = existingMounts
+                .Select(m => m.MountPath)
+                .Where(p => p is not null)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var mountAnnotation in mountAnnotations)
+            {
+                if (existingPaths.Contains(mountAnnotation.ContainerPath))
+                {
+                    logger.LogInformation(
+                        "Mount '{Path}' on '{Service}' already exists — skipping",
+                        mountAnnotation.ContainerPath, svc.Name
+                    );
+                    continue;
+                }
+
+                logger.LogInformation(
+                    "Creating volume mount '{Volume}' → '{Path}' on '{Service}'",
+                    mountAnnotation.VolumeName, mountAnnotation.ContainerPath, svc.Name
+                );
+
+                await apiClient.CreateMountAsync(new CreateMountRequest
+                {
+                    Type = "volume",
+                    MountPath = mountAnnotation.ContainerPath,
+                    ServiceId = applicationId,
+                    ServiceType = "application",
+                    VolumeName = mountAnnotation.VolumeName,
+                }, ct);
+            }
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1333,4 +1374,18 @@ public class DokployServiceNoSubstitutionAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
     public required IReadOnlySet<string> EnvKeys { get; init; }
+}
+
+/// <summary>
+/// Annotation that requests a persistent volume mount for a Dokploy Application service.
+/// Applied via <c>WithDokployMount()</c> and consumed by
+/// <c>ConfigureAndDeployApplicationAsync</c> in <see cref="DokployInfrastructure"/>.
+/// </summary>
+public class DokployServiceMountAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+    /// <summary>Absolute path inside the container (e.g. /var/lib/postgresql/data).</summary>
+    public required string ContainerPath { get; init; }
+    /// <summary>Stable named Docker volume to create/reuse across deploys.</summary>
+    public required string VolumeName { get; init; }
 }

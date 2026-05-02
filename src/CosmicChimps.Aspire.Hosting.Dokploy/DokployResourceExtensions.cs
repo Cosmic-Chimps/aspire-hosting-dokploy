@@ -240,5 +240,45 @@ public static class DokployResourceExtensions
 
         return resourceBuilder;
     }
-}
 
+    /// <summary>
+    /// Configures a persistent volume mount for this resource in Dokploy.
+    /// Dokploy Application services (Docker Swarm) do not automatically persist data from
+    /// <c>WithDataVolume()</c> — the volume must be registered via the Dokploy mounts API.
+    /// This extension ensures the mount is created on first deploy and skipped on subsequent
+    /// deploys if a mount for the same <paramref name="containerPath"/> already exists.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="resourceBuilder">The resource builder to configure.</param>
+    /// <param name="dokployBuilder">The Dokploy resource builder (returned by <see cref="PublishToDokploy"/>).</param>
+    /// <param name="containerPath">Absolute path inside the container (e.g. <c>/var/lib/postgresql/data</c>).</param>
+    /// <param name="volumeName">
+    /// Named Docker volume to create/reuse (e.g. <c>"bb-postgres-data"</c>).
+    /// Use a stable name so the same volume is reused across deploys.
+    /// </param>
+    public static IResourceBuilder<T> WithDokployMount<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource>? dokployBuilder,
+        string containerPath,
+        string volumeName
+    )
+        where T : IResource
+    {
+        if (dokployBuilder is null)
+            return resourceBuilder; // dev mode — no-op
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeName);
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceMountAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                ContainerPath = containerPath,
+                VolumeName = volumeName,
+            }
+        );
+
+        return resourceBuilder;
+    }
+}

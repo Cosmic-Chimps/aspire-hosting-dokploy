@@ -548,4 +548,28 @@ public class DokployApiClient
         );
         await _client.Request("api", "domain.create").PostJsonAsync(request, cancellationToken: ct);
     }
+
+    // ─── Mounts ──────────────────────────────────────────────────────────────
+
+    public async Task<List<MountListItem>> GetMountsByApplicationIdAsync(
+        string applicationId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET mounts.allNamedByApplicationId applicationId={Id}", applicationId);
+        var json = await _client
+            .Request("api", "mounts.allNamedByApplicationId")
+            .SetQueryParam("applicationId", applicationId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<List<MountListItem>>(json, JsonSerializerOptions) ?? [];
+    }
+
+    public async Task CreateMountAsync(CreateMountRequest request, CancellationToken ct = default)
+    {
+        _logger.LogDebug(
+            "POST mounts.create serviceId={Id} mountPath={Path} type={Type}",
+            request.ServiceId, request.MountPath, request.Type
+        );
+        await _client.Request("api", "mounts.create").PostJsonAsync(request, cancellationToken: ct);
+    }
 }
