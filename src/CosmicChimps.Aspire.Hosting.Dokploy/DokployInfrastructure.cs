@@ -1075,8 +1075,8 @@ internal sealed class DokployInfrastructure(
         );
 
         // Configure persistent volume mounts (idempotent — skips if already exists).
-        var mountAnnotations = resource.Annotations
-            .OfType<DokployServiceMountAnnotation>()
+        var mountAnnotations = resource
+            .Annotations.OfType<DokployServiceMountAnnotation>()
             .Where(a => string.Equals(a.ServiceName, svc.Name, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
@@ -1094,24 +1094,31 @@ internal sealed class DokployInfrastructure(
                 {
                     logger.LogInformation(
                         "Mount '{Path}' on '{Service}' already exists — skipping",
-                        mountAnnotation.ContainerPath, svc.Name
+                        mountAnnotation.ContainerPath,
+                        svc.Name
                     );
                     continue;
                 }
 
                 logger.LogInformation(
                     "Creating volume mount '{Volume}' → '{Path}' on '{Service}'",
-                    mountAnnotation.VolumeName, mountAnnotation.ContainerPath, svc.Name
+                    mountAnnotation.VolumeName,
+                    mountAnnotation.ContainerPath,
+                    svc.Name
                 );
 
-                await apiClient.CreateMountAsync(new CreateMountRequest
-                {
-                    Type = "volume",
-                    MountPath = mountAnnotation.ContainerPath,
-                    ServiceId = applicationId,
-                    ServiceType = "application",
-                    VolumeName = mountAnnotation.VolumeName,
-                }, ct);
+                await apiClient.CreateMountAsync(
+                    new CreateMountRequest
+                    {
+                        Type = mountAnnotation.Type,
+                        MountPath = mountAnnotation.ContainerPath,
+                        ServiceId = applicationId,
+                        ServiceType = "application",
+                        VolumeName = mountAnnotation.VolumeName,
+                        HostPath = mountAnnotation.HostPath,
+                    },
+                    ct
+                );
             }
         }
     }
@@ -1384,8 +1391,16 @@ public class DokployServiceNoSubstitutionAnnotation : IResourceAnnotation
 public class DokployServiceMountAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
+
     /// <summary>Absolute path inside the container (e.g. /var/lib/postgresql/data).</summary>
     public required string ContainerPath { get; init; }
-    /// <summary>Stable named Docker volume to create/reuse across deploys.</summary>
-    public required string VolumeName { get; init; }
+
+    /// <summary>Stable named Docker volume to create/reuse across deploys (used when Type = "volume").</summary>
+    public string? VolumeName { get; init; }
+
+    /// <summary>Absolute path on the Docker host (used when Type = "bind").</summary>
+    public string? HostPath { get; init; }
+
+    /// <summary>"volume" (default) or "bind".</summary>
+    public string Type { get; init; } = "volume";
 }

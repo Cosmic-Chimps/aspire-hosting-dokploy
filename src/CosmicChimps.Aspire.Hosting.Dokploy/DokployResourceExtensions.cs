@@ -276,6 +276,38 @@ public static class DokployResourceExtensions
                 ServiceName = resourceBuilder.Resource.Name,
                 ContainerPath = containerPath,
                 VolumeName = volumeName,
+                Type = "volume",
+            }
+        );
+
+        return resourceBuilder;
+    }
+
+    /// <summary>
+    /// Registers a bind mount from a host path into the container for a Dokploy application service.
+    /// The host directory must exist on the Docker host before deployment.
+    /// </summary>
+    public static IResourceBuilder<T> WithDokployBindMount<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource>? dokployBuilder,
+        string hostPath,
+        string containerPath
+    )
+        where T : IResource
+    {
+        if (dokployBuilder is null)
+            return resourceBuilder; // dev mode — no-op
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerPath);
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceMountAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                ContainerPath = containerPath,
+                HostPath = hostPath,
+                Type = "bind",
             }
         );
 
