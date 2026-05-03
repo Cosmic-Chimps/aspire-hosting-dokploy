@@ -1083,27 +1083,21 @@ internal sealed class DokployInfrastructure(
         if (mountAnnotations.Count > 0)
         {
             var existingMounts = await apiClient.GetMountsByApplicationIdAsync(applicationId, ct);
-            // Dedup by (MountPath, HostPath) composite key so bind mounts with the same
-            // container path but different host paths are not skipped, and the same
-            // (mountPath + hostPath) pair is never registered twice.
-            var existingMountKeys = existingMounts
+            // Dedup by MountPath (container path) — each container path is unique per service.
+            // The DB stores the actual hostPath Dokploy assigned, so MountPath-based dedup
+            // reliably prevents creating the same bind mount twice on re-deploy.
+            var existingMountPaths = existingMounts
                 .Where(m => m.MountPath is not null)
-                .Select(m => (MountPath: m.MountPath!, HostPath: m.HostPath ?? string.Empty))
+                .Select(m => m.MountPath!)
                 .ToHashSet();
 
             foreach (var mountAnnotation in mountAnnotations)
             {
-                var key = (
-                    MountPath: mountAnnotation.ContainerPath,
-                    HostPath: mountAnnotation.HostPath ?? string.Empty
-                );
-
-                if (existingMountKeys.Contains(key))
+                if (existingMountPaths.Contains(mountAnnotation.ContainerPath))
                 {
                     logger.LogInformation(
-                        "Mount '{Path}' (hostPath='{HostPath}') on '{Service}' already exists — skipping",
+                        "Mount '{Path}' on '{Service}' already exists — skipping",
                         mountAnnotation.ContainerPath,
-                        mountAnnotation.HostPath,
                         svc.Name
                     );
                     continue;

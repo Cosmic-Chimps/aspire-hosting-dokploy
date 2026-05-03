@@ -556,10 +556,14 @@ public class DokployApiClient
         CancellationToken ct = default
     )
     {
-        _logger.LogDebug("GET mounts.allNamedByApplicationId applicationId={Id}", applicationId);
+        // Use listByServiceId which reads from the DB (includes bind mounts).
+        // allNamedByApplicationId queries live Docker container mounts and filters
+        // to Type=="volume" only — it never returns bind mounts, breaking dedup.
+        _logger.LogDebug("GET mounts.listByServiceId serviceId={Id}", applicationId);
         var json = await _client
-            .Request("api", "mounts.allNamedByApplicationId")
-            .SetQueryParam("applicationId", applicationId)
+            .Request("api", "mounts.listByServiceId")
+            .SetQueryParam("serviceId", applicationId)
+            .SetQueryParam("serviceType", "application")
             .GetStringAsync(cancellationToken: ct);
         return JsonSerializer.Deserialize<List<MountListItem>>(json, JsonSerializerOptions) ?? [];
     }
