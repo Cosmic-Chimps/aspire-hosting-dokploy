@@ -88,6 +88,14 @@ internal sealed class DokployInfrastructure(
                 string.Join(", ", stopGracePeriodAnnotations.Select(kv => $"{kv.Key}={kv.Value / 1_000_000_000}s"))
             );
 
+        // ── 3e. Collect update order annotations (from WithDokployUpdateOrder() calls) ─
+        var updateOrderAnnotations = CollectUpdateOrderAnnotations(resource);
+        if (updateOrderAnnotations.Count > 0)
+            logger.LogDebug(
+                "Update order annotations: {Services}",
+                string.Join(", ", updateOrderAnnotations.Select(kv => $"{kv.Key}={kv.Value}"))
+            );
+
         // ── 4. Parse compose into per-service descriptors ─────────────────────
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
         logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
@@ -233,6 +241,7 @@ internal sealed class DokployInfrastructure(
                         domainAnnotations,
                         healthCheckAnnotations,
                         stopGracePeriodAnnotations,
+                        updateOrderAnnotations,
                         ct
                     );
                 }
@@ -924,6 +933,7 @@ internal sealed class DokployInfrastructure(
         IReadOnlyDictionary<string, DokployDomainAnnotation> domainAnnotations,
         IReadOnlyDictionary<string, HealthCheckSwarm> healthCheckAnnotations,
         IReadOnlyDictionary<string, long> stopGracePeriodAnnotations,
+        IReadOnlyDictionary<string, string> updateOrderAnnotations,
         CancellationToken ct
     )
     {
@@ -1059,8 +1069,9 @@ internal sealed class DokployInfrastructure(
         // Apply Swarm health check if configured via WithDokployHealthCheck().
         var hasHealthCheck = healthCheckAnnotations.TryGetValue(svc.Name, out var healthCheck);
         var hasStopGrace = stopGracePeriodAnnotations.TryGetValue(svc.Name, out var stopGraceNs);
+        var hasUpdateOrder = updateOrderAnnotations.TryGetValue(svc.Name, out var updateOrder);
 
-        if (hasHealthCheck || hasStopGrace)
+        if (hasHealthCheck || hasStopGrace || hasUpdateOrder)
         {
             await apiClient.UpdateApplicationAsync(
                 new UpdateApplicationRequest
@@ -1068,6 +1079,7 @@ internal sealed class DokployInfrastructure(
                     ApplicationId = applicationId,
                     HealthCheckSwarm = healthCheck,
                     StopGracePeriod = hasStopGrace ? stopGraceNs : null,
+                    UpdateConfig = hasUpdateOrder ? new SwarmUpdateConfig { Order = updateOrder } : null,
                 },
                 ct
             );
@@ -1086,6 +1098,12 @@ internal sealed class DokployInfrastructure(
                     "Configured stop grace period for '{Service}': {Seconds}s",
                     svc.Name,
                     stopGraceNs / 1_000_000_000
+                );
+            if (hasUpdateOrder)
+                logger.LogInformation(
+                    "Configured update order for '{Service}': {Order}",
+                    svc.Name,
+                    updateOrder
                 );
         }
 
@@ -1246,6 +1264,18 @@ internal sealed class DokployInfrastructure(
             var annotation in resource.Annotations.OfType<DokployServiceStopGracePeriodAnnotation>()
         )
             result[annotation.ServiceName] = annotation.Nanoseconds;
+        return result;
+    }
+
+    private static Dictionary<string, string> CollectUpdateOrderAnnotations(
+        DokployResource resource
+    )
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (
+            var annotation in resource.Annotations.OfType<DokployServiceUpdateOrderAnnotation>()
+        )
+            result[annotation.ServiceName] = annotation.Order;
         return result;
     }
 
@@ -1419,6 +1449,19 @@ public class DokployServiceStopGracePeriodAnnotation : IResourceAnnotation
 
     /// <summary>Stop grace period in nanoseconds (1 second = 1_000_000_000 ns).</summary>
     public required long Nanoseconds { get; init; }
+}
+
+/// <summary>
+/// Annotation attached to a DokployResource to set the Docker Swarm update order for a specific service.
+/// Use "stop-first" for stateful single-replica services (PostgreSQL, RabbitMQ) to prevent the new
+/// container from starting before the old one releases its data directory lock.
+/// </summary>
+public class DokployServiceUpdateOrderAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+
+    /// <summary>"stop-first" or "start-first" (Swarm default).</summary>
+    public required string Order { get; init; }
 }
 
 /// <summary>

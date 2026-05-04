@@ -120,7 +120,7 @@ public class HealthCheckSwarm
 }
 
 /// <summary>
-/// Request body for POST /api/application.update — only sets healthCheckSwarm and/or stopGracePeriod.
+/// Request body for POST /api/application.update — only sets healthCheckSwarm, stopGracePeriod, and/or updateConfig.
 /// Other fields are omitted (WhenWritingNull) so existing values are preserved.
 /// </summary>
 public class UpdateApplicationRequest
@@ -139,4 +139,26 @@ public class UpdateApplicationRequest
     /// </summary>
     [JsonPropertyName("stopGracePeriod")]
     public long? StopGracePeriod { get; set; }
+
+    /// <summary>
+    /// Docker Swarm rolling update configuration.
+    /// Use <c>order: "stop-first"</c> for stateful single-replica services (PostgreSQL, RabbitMQ)
+    /// to prevent the new container starting before the old one releases the data directory.
+    /// null means "do not change the existing value".
+    /// </summary>
+    [JsonPropertyName("updateConfig")]
+    public SwarmUpdateConfig? UpdateConfig { get; set; }
+}
+
+/// <summary>
+/// Docker Swarm rolling update configuration.
+/// </summary>
+public class SwarmUpdateConfig
+{
+    /// <summary>
+    /// Update order: "stop-first" (stop old before starting new) or "start-first" (default Swarm behaviour).
+    /// Use "stop-first" for any stateful service with a data directory lock (PostgreSQL, RabbitMQ, etc.).
+    /// </summary>
+    [JsonPropertyName("order")]
+    public string? Order { get; set; }
 }

@@ -288,6 +288,73 @@ public static class DokployResourceExtensions
         return resourceBuilder;
     }
 
+
+    /// <summary>
+    /// Sets the Docker Swarm rolling update order for this resource when deployed to Dokploy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By default Docker Swarm uses <c>start-first</c>: it starts the new container before stopping
+    /// the old one. For stateful single-replica services with a data-directory lock (PostgreSQL, RabbitMQ),
+    /// this causes a race where both containers try to own the same volume simultaneously, resulting in
+    /// <c>postmaster.pid invalid</c> errors and container crashes.
+    /// </para>
+    /// <para>
+    /// Use <c>stop-first</c> to make Swarm stop the old container fully before starting the new one.
+    /// For most stateful services, combine with <see cref="WithDokployStopGracePeriod{T}"/> so the
+    /// old container has time to flush WAL / do a clean checkpoint before being killed.
+    /// </para>
+    /// <para>
+    /// Or simply call <see cref="WithDokployStatefulService{T}"/> which sets both at once.
+    /// </para>
+    /// </remarks>
+    /// <param name="order">"stop-first" (recommended for stateful services) or "start-first" (Swarm default).</param>
+    public static IResourceBuilder<T> WithDokployUpdateOrder<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        string order = "stop-first"
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+        if (order is not ("stop-first" or "start-first"))
+            throw new ArgumentException("Order must be 'stop-first' or 'start-first'.", nameof(order));
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceUpdateOrderAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                Order = order,
+            }
+        );
+
+        return resourceBuilder;
+    }
+
+    /// <summary>
+    /// Convenience method that configures a stateful single-replica service (PostgreSQL, RabbitMQ, etc.)
+    /// for safe Dokploy redeployment by combining two settings:
+    /// <list type="bullet">
+    ///   <item><description><b>stop-first update order</b> — Swarm stops the old container before starting the new one, preventing data-directory lock races.</description></item>
+    ///   <item><description><b>stop grace period</b> — gives the old container time to flush WAL / quorum sync before being killed.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="stopGracePeriod">
+    /// How long Docker waits after SIGTERM before sending SIGKILL.
+    /// Defaults to 2 minutes — sufficient for PostgreSQL to complete a clean checkpoint.
+    /// </param>
+    public static IResourceBuilder<T> WithDokployStatefulService<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        TimeSpan? stopGracePeriod = null
+    )
+        where T : IResource
+    {
+        return resourceBuilder
+            .WithDokployUpdateOrder(dokployBuilder, "stop-first")
+            .WithDokployStopGracePeriod(dokployBuilder, stopGracePeriod ?? TimeSpan.FromMinutes(2));
+    }
+
     /// <summary>
     /// Configures a persistent volume mount for this resource in Dokploy.
     /// Dokploy Application services (Docker Swarm) do not automatically persist data from
