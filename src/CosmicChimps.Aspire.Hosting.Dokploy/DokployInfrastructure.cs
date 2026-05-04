@@ -1134,40 +1134,67 @@ internal sealed class DokployInfrastructure(
         var hasStopGrace = stopGracePeriodAnnotations.TryGetValue(svc.Name, out var stopGraceNs);
         var hasUpdateOrder = updateOrderAnnotations.TryGetValue(svc.Name, out var updateOrder);
 
-        if (hasHealthCheck || hasStopGrace || hasUpdateOrder)
+        // HealthCheckSwarm: Dokploy supports this field in application.update — fail hard on error.
+        if (hasHealthCheck)
         {
             await apiClient.UpdateApplicationAsync(
                 new UpdateApplicationRequest
                 {
                     ApplicationId = applicationId,
                     HealthCheckSwarm = healthCheck,
-                    StopGracePeriod = hasStopGrace ? stopGraceNs : null,
-                    UpdateConfig = hasUpdateOrder ? new SwarmUpdateConfig { Order = updateOrder } : null,
                 },
                 ct
             );
-            if (hasHealthCheck)
-                logger.LogInformation(
-                    "Configured health check for '{Service}': {Test} (interval={Interval}s timeout={Timeout}s startPeriod={StartPeriod}s retries={Retries})",
-                    svc.Name,
-                    string.Join(" ", healthCheck!.Test),
-                    healthCheck.Interval / 1_000_000_000,
-                    healthCheck.Timeout / 1_000_000_000,
-                    healthCheck.StartPeriod / 1_000_000_000,
-                    healthCheck.Retries
+            logger.LogInformation(
+                "Configured health check for '{Service}': {Test} (interval={Interval}s timeout={Timeout}s startPeriod={StartPeriod}s retries={Retries})",
+                svc.Name,
+                string.Join(" ", healthCheck!.Test),
+                healthCheck.Interval / 1_000_000_000,
+                healthCheck.Timeout / 1_000_000_000,
+                healthCheck.StartPeriod / 1_000_000_000,
+                healthCheck.Retries
+            );
+        }
+
+        // StopGracePeriod / UpdateConfig: optional Swarm settings — some Dokploy versions don't
+        // expose these fields in application.update and return "No values to set" (500).
+        // Swallow that error so it never breaks a deployment; log a warning instead.
+        if (hasStopGrace || hasUpdateOrder)
+        {
+            try
+            {
+                await apiClient.UpdateApplicationAsync(
+                    new UpdateApplicationRequest
+                    {
+                        ApplicationId = applicationId,
+                        StopGracePeriod = hasStopGrace ? stopGraceNs : null,
+                        UpdateConfig = hasUpdateOrder ? new SwarmUpdateConfig { Order = updateOrder } : null,
+                    },
+                    ct
                 );
-            if (hasStopGrace)
-                logger.LogInformation(
-                    "Configured stop grace period for '{Service}': {Seconds}s",
+                if (hasStopGrace)
+                    logger.LogInformation(
+                        "Configured stop grace period for '{Service}': {Seconds}s",
+                        svc.Name,
+                        stopGraceNs / 1_000_000_000
+                    );
+                if (hasUpdateOrder)
+                    logger.LogInformation(
+                        "Configured update order for '{Service}': {Order}",
+                        svc.Name,
+                        updateOrder
+                    );
+            }
+            catch (Exception ex) when (ex.Message.Contains("No values to set") || ex.Message.Contains("500"))
+            {
+                logger.LogWarning(
+                    "Could not apply Swarm settings (stopGracePeriod/updateConfig) for '{Service}' — "
+                    + "Dokploy version may not support these fields via application.update. "
+                    + "Set them manually in the Dokploy UI if needed. Error: {Error}",
                     svc.Name,
-                    stopGraceNs / 1_000_000_000
+                    ex.Message
                 );
-            if (hasUpdateOrder)
-                logger.LogInformation(
-                    "Configured update order for '{Service}': {Order}",
-                    svc.Name,
-                    updateOrder
-                );
+            }
         }
 
         // Deploy the application (trigger Swarm rolling update).
