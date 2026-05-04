@@ -973,6 +973,69 @@ internal sealed class DokployInfrastructure(
             );
         }
 
+        // Check skip-redeploy flag early — we need to fetch current state to compare image tag.
+        // If set, and if the service is running with the same image tag, we skip both
+        // SaveDockerProviderAsync and DeployApplicationAsync (no-op deploy).
+        var skipIfRunning = resource.Annotations
+            .OfType<DokployServiceSkipRedeployAnnotation>()
+            .Any(a => string.Equals(a.ServiceName, svc.Name, StringComparison.OrdinalIgnoreCase));
+
+        if (skipIfRunning)
+        {
+            var current = await apiClient.GetApplicationAsync(applicationId, ct);
+            var isRunning = string.Equals(current.ApplicationStatus, "running", StringComparison.OrdinalIgnoreCase);
+            var sameTag = string.Equals(current.DockerImage, imageToUse, StringComparison.Ordinal);
+
+            if (isRunning && sameTag)
+            {
+                logger.LogInformation(
+                    "Skipping redeploy for '{Service}' — already running with image {Image} (WithDokploySkipRedeploy)",
+                    svc.Name, imageToUse
+                );
+                goto afterDockerSave;
+            }
+
+            if (isRunning && !sameTag)
+            {
+                // Tags differ — compare content digests via the registry API.
+                // If the digest is the same, the image content didn't change (only the tag did),
+                // so we can still skip. This is the common case with timestamp-based CI tags.
+                logger.LogInformation(
+                    "Service '{Service}' is running but image tag changed ({Old} → {New}) — comparing digests",
+                    svc.Name, current.DockerImage ?? "?", imageToUse
+                );
+
+                var currentDigest = current.DockerImage is null ? null
+                    : await DockerRegistryDigestChecker.GetImageDigestAsync(
+                        current.DockerImage, registry?.Username, registry?.Password, logger, ct);
+                var newDigest = await DockerRegistryDigestChecker.GetImageDigestAsync(
+                    imageToUse, registry?.Username, registry?.Password, logger, ct);
+
+                if (currentDigest is not null && newDigest is not null && currentDigest == newDigest)
+                {
+                    logger.LogInformation(
+                        "Skipping redeploy for '{Service}' — digest unchanged ({Digest}) despite new tag (WithDokploySkipRedeploy)",
+                        svc.Name, currentDigest
+                    );
+                    goto afterDockerSave;
+                }
+
+                logger.LogInformation(
+                    "Service '{Service}' image content changed (old={OldDigest}, new={NewDigest}) — deploying",
+                    svc.Name,
+                    currentDigest ?? "unknown",
+                    newDigest ?? "unknown"
+                );
+            }
+            else if (!isRunning)
+            {
+                logger.LogInformation(
+                    "Service '{Service}' is not running (status={Status}) — deploying despite WithDokploySkipRedeploy",
+                    svc.Name, current.ApplicationStatus ?? "unknown"
+                );
+            }
+        }
+
         // Save Docker image + pull credentials
         logger.LogDebug(
             "Saving docker provider for '{Service}': image={Image} registry={Registry}",
@@ -1107,11 +1170,14 @@ internal sealed class DokployInfrastructure(
                 );
         }
 
+        // Deploy the application (trigger Swarm rolling update).
         logger.LogInformation("Deploying application '{Service}' ({Id})", svc.Name, applicationId);
         await apiClient.DeployApplicationAsync(
             new DeployApplicationRequest { ApplicationId = applicationId },
             ct
         );
+
+        afterDockerSave:
 
         // Configure persistent volume mounts (idempotent — skips if already exists).
         var mountAnnotations = resource
@@ -1462,6 +1528,19 @@ public class DokployServiceUpdateOrderAnnotation : IResourceAnnotation
 
     /// <summary>"stop-first" or "start-first" (Swarm default).</summary>
     public required string Order { get; init; }
+}
+
+/// <summary>
+/// Annotation that marks a service as "skip redeploy if already running".
+/// When set, the Aspire deployment pipeline still saves the latest image and env vars to Dokploy,
+/// but skips calling DeployApplicationAsync if the service status is already "running".
+/// This prevents unnecessary container restarts for stateful infrastructure services
+/// (PostgreSQL, RabbitMQ, etc.) where a restart can cause data-directory lock races or WAL corruption.
+/// If the service is NOT running (first deploy, or crashed), it is always deployed regardless.
+/// </summary>
+public class DokployServiceSkipRedeployAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
 }
 
 /// <summary>

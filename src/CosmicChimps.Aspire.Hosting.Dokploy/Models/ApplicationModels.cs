@@ -36,6 +36,9 @@ public class ApplicationResponse
 
     [JsonPropertyName("env")]
     public string? Env { get; set; }
+
+    [JsonPropertyName("dockerImage")]
+    public string? DockerImage { get; set; }
 }
 
 /// <summary>Item returned by application.all — same shape as ApplicationResponse.</summary>

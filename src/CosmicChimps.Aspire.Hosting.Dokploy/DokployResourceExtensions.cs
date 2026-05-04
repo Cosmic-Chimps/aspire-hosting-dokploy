@@ -333,9 +333,10 @@ public static class DokployResourceExtensions
 
     /// <summary>
     /// Convenience method that configures a stateful single-replica service (PostgreSQL, RabbitMQ, etc.)
-    /// for safe Dokploy redeployment by combining two settings:
+    /// for safe Dokploy redeployment by combining three settings:
     /// <list type="bullet">
-    ///   <item><description><b>stop-first update order</b> — Swarm stops the old container before starting the new one, preventing data-directory lock races.</description></item>
+    ///   <item><description><b>skip-redeploy if running</b> — if the service is already running, the Aspire pipeline updates its config but does NOT trigger a Swarm redeploy. This prevents unnecessary restarts on every app deployment.</description></item>
+    ///   <item><description><b>stop-first update order</b> — when a redeploy IS needed, Swarm stops the old container before starting the new one, preventing data-directory lock races.</description></item>
     ///   <item><description><b>stop grace period</b> — gives the old container time to flush WAL / quorum sync before being killed.</description></item>
     /// </list>
     /// </summary>
@@ -351,8 +352,48 @@ public static class DokployResourceExtensions
         where T : IResource
     {
         return resourceBuilder
+            .WithDokploySkipRedeploy(dokployBuilder)
             .WithDokployUpdateOrder(dokployBuilder, "stop-first")
             .WithDokployStopGracePeriod(dokployBuilder, stopGracePeriod ?? TimeSpan.FromMinutes(2));
+    }
+
+    /// <summary>
+    /// Marks this service as "skip redeploy if already running" in Dokploy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When set, the Aspire deployment pipeline still saves the latest docker image and env vars
+    /// to Dokploy (so configuration stays up to date), but skips calling <c>DeployApplicationAsync</c>
+    /// if the service is already running. If the service is NOT running (first deploy, crashed, or
+    /// manually stopped), it is always deployed regardless of this flag.
+    /// </para>
+    /// <para>
+    /// Use this for stateful infrastructure services (PostgreSQL, RabbitMQ, Keycloak) where
+    /// a container restart on every app deployment is undesirable. When you genuinely need to
+    /// redeploy the service (e.g. after an image upgrade), trigger it manually from the Dokploy UI.
+    /// </para>
+    /// <para>
+    /// Typically combined with <see cref="WithDokployUpdateOrder{T}"/> and
+    /// <see cref="WithDokployStopGracePeriod{T}"/> — or simply use
+    /// <see cref="WithDokployStatefulService{T}"/> which sets all three at once.
+    /// </para>
+    /// </remarks>
+    public static IResourceBuilder<T> WithDokploySkipRedeploy<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceSkipRedeployAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+            }
+        );
+
+        return resourceBuilder;
     }
 
     /// <summary>
