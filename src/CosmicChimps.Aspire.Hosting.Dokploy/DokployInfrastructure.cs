@@ -80,6 +80,14 @@ internal sealed class DokployInfrastructure(
                 )
             );
 
+        // ── 3d. Collect stop grace period annotations (from WithDokployStopGracePeriod() calls) ─
+        var stopGracePeriodAnnotations = CollectStopGracePeriodAnnotations(resource);
+        if (stopGracePeriodAnnotations.Count > 0)
+            logger.LogDebug(
+                "Stop grace period annotations: {Services}",
+                string.Join(", ", stopGracePeriodAnnotations.Select(kv => $"{kv.Key}={kv.Value / 1_000_000_000}s"))
+            );
+
         // ── 4. Parse compose into per-service descriptors ─────────────────────
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
         logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
@@ -224,6 +232,7 @@ internal sealed class DokployInfrastructure(
                         apiClient,
                         domainAnnotations,
                         healthCheckAnnotations,
+                        stopGracePeriodAnnotations,
                         ct
                     );
                 }
@@ -914,6 +923,7 @@ internal sealed class DokployInfrastructure(
         DokployApiClient apiClient,
         IReadOnlyDictionary<string, DokployDomainAnnotation> domainAnnotations,
         IReadOnlyDictionary<string, HealthCheckSwarm> healthCheckAnnotations,
+        IReadOnlyDictionary<string, long> stopGracePeriodAnnotations,
         CancellationToken ct
     )
     {
@@ -1047,25 +1057,36 @@ internal sealed class DokployInfrastructure(
         }
 
         // Apply Swarm health check if configured via WithDokployHealthCheck().
-        if (healthCheckAnnotations.TryGetValue(svc.Name, out var healthCheck))
+        var hasHealthCheck = healthCheckAnnotations.TryGetValue(svc.Name, out var healthCheck);
+        var hasStopGrace = stopGracePeriodAnnotations.TryGetValue(svc.Name, out var stopGraceNs);
+
+        if (hasHealthCheck || hasStopGrace)
         {
             await apiClient.UpdateApplicationAsync(
                 new UpdateApplicationRequest
                 {
                     ApplicationId = applicationId,
                     HealthCheckSwarm = healthCheck,
+                    StopGracePeriod = hasStopGrace ? stopGraceNs : null,
                 },
                 ct
             );
-            logger.LogInformation(
-                "Configured health check for '{Service}': {Test} (interval={Interval}s timeout={Timeout}s startPeriod={StartPeriod}s retries={Retries})",
-                svc.Name,
-                string.Join(" ", healthCheck.Test),
-                healthCheck.Interval / 1_000_000_000,
-                healthCheck.Timeout / 1_000_000_000,
-                healthCheck.StartPeriod / 1_000_000_000,
-                healthCheck.Retries
-            );
+            if (hasHealthCheck)
+                logger.LogInformation(
+                    "Configured health check for '{Service}': {Test} (interval={Interval}s timeout={Timeout}s startPeriod={StartPeriod}s retries={Retries})",
+                    svc.Name,
+                    string.Join(" ", healthCheck!.Test),
+                    healthCheck.Interval / 1_000_000_000,
+                    healthCheck.Timeout / 1_000_000_000,
+                    healthCheck.StartPeriod / 1_000_000_000,
+                    healthCheck.Retries
+                );
+            if (hasStopGrace)
+                logger.LogInformation(
+                    "Configured stop grace period for '{Service}': {Seconds}s",
+                    svc.Name,
+                    stopGraceNs / 1_000_000_000
+                );
         }
 
         logger.LogInformation("Deploying application '{Service}' ({Id})", svc.Name, applicationId);
@@ -1213,6 +1234,18 @@ internal sealed class DokployInfrastructure(
             var annotation in resource.Annotations.OfType<DokployServiceHealthCheckAnnotation>()
         )
             result[annotation.ServiceName] = annotation.HealthCheck;
+        return result;
+    }
+
+    private static Dictionary<string, long> CollectStopGracePeriodAnnotations(
+        DokployResource resource
+    )
+    {
+        var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (
+            var annotation in resource.Annotations.OfType<DokployServiceStopGracePeriodAnnotation>()
+        )
+            result[annotation.ServiceName] = annotation.Nanoseconds;
         return result;
     }
 
@@ -1373,6 +1406,19 @@ public class DokployServiceHealthCheckAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
     public required HealthCheckSwarm HealthCheck { get; init; }
+}
+
+/// <summary>
+/// Annotation attached to a DokployResource to set a Docker Swarm stop grace period for a specific service.
+/// The stop grace period is the time Docker waits after sending SIGTERM before sending SIGKILL on redeploy.
+/// Increase this for services that need time for clean shutdown (e.g. PostgreSQL WAL flush, RabbitMQ quorum sync).
+/// </summary>
+public class DokployServiceStopGracePeriodAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+
+    /// <summary>Stop grace period in nanoseconds (1 second = 1_000_000_000 ns).</summary>
+    public required long Nanoseconds { get; init; }
 }
 
 /// <summary>

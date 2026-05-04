@@ -120,7 +120,7 @@ public class HealthCheckSwarm
 }
 
 /// <summary>
-/// Request body for POST /api/application.update — only sets healthCheckSwarm.
+/// Request body for POST /api/application.update — only sets healthCheckSwarm and/or stopGracePeriod.
 /// Other fields are omitted (WhenWritingNull) so existing values are preserved.
 /// </summary>
 public class UpdateApplicationRequest
@@ -130,4 +130,13 @@ public class UpdateApplicationRequest
 
     [JsonPropertyName("healthCheckSwarm")]
     public HealthCheckSwarm? HealthCheckSwarm { get; set; }
+
+    /// <summary>
+    /// Docker Swarm stop grace period in nanoseconds.
+    /// This is the time Docker waits after sending SIGTERM before sending SIGKILL.
+    /// Increase for services that need time for clean shutdown (e.g. PostgreSQL, RabbitMQ).
+    /// null means "do not change the existing value".
+    /// </summary>
+    [JsonPropertyName("stopGracePeriod")]
+    public long? StopGracePeriod { get; set; }
 }

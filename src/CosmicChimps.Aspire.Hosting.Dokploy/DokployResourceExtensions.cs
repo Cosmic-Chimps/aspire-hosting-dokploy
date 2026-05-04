@@ -241,6 +241,53 @@ public static class DokployResourceExtensions
         return resourceBuilder;
     }
 
+
+    /// <summary>
+    /// Sets the Docker Swarm stop grace period for this resource when deployed to Dokploy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When Docker Swarm redeploys a service, it sends <c>SIGTERM</c> and waits up to
+    /// <paramref name="duration"/> before sending <c>SIGKILL</c>. If the container does not
+    /// exit cleanly within that window, the process is killed forcefully — which can corrupt
+    /// write-ahead logs for databases (PostgreSQL, RabbitMQ, etc.).
+    /// </para>
+    /// <para>
+    /// The Dokploy UI default is 30 s. For PostgreSQL and other databases with write-ahead
+    /// logs, 2 minutes is recommended to ensure a clean checkpoint before shutdown.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="resourceBuilder">The resource builder to configure.</param>
+    /// <param name="dokployBuilder">The Dokploy resource builder (returned by <see cref="PublishToDokploy"/>).</param>
+    /// <param name="duration">
+    /// How long Docker waits for the container to exit after SIGTERM before sending SIGKILL.
+    /// Recommended minimum for databases: <c>TimeSpan.FromMinutes(2)</c>.
+    /// </param>
+    public static IResourceBuilder<T> WithDokployStopGracePeriod<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        TimeSpan duration
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+        if (duration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(duration), "Stop grace period must be positive.");
+
+        var nanoseconds = (long)(duration.TotalSeconds * 1_000_000_000L);
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceStopGracePeriodAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+                Nanoseconds = nanoseconds,
+            }
+        );
+
+        return resourceBuilder;
+    }
+
     /// <summary>
     /// Configures a persistent volume mount for this resource in Dokploy.
     /// Dokploy Application services (Docker Swarm) do not automatically persist data from
