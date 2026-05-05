@@ -468,4 +468,45 @@ public static class DokployResourceExtensions
 
         return resourceBuilder;
     }
+
+    /// <summary>
+    /// Completely excludes this service from the Dokploy deployment pipeline.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When set, the service is removed from the services-to-deploy list before any Dokploy API
+    /// calls are made. The service is not updated, not redeployed, and not touched in any way.
+    /// </para>
+    /// <para>
+    /// Use this for services you want to deploy independently — e.g. skip openbao/keycloak/postgres
+    /// during an app-only CI deploy. Typically driven by a CI environment variable from a manual
+    /// workflow dispatch input:
+    /// <code>
+    /// if (config["Deploy:Postgres"] != "false")
+    ///     postgres.WithDokployExclude(dokploy);
+    /// </code>
+    /// </para>
+    /// <para>
+    /// Unlike <see cref="WithDokploySkipRedeploy{T}"/> (which still updates config in Dokploy),
+    /// this annotation skips the service entirely — no config update, no redeploy check.
+    /// </para>
+    /// </remarks>
+    public static IResourceBuilder<T> WithDokployExclude<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource>? dokployBuilder
+    )
+        where T : IResource
+    {
+        if (dokployBuilder is null)
+            return resourceBuilder;
+
+        dokployBuilder.Resource.Annotations.Add(
+            new DokployServiceExcludeAnnotation
+            {
+                ServiceName = resourceBuilder.Resource.Name,
+            }
+        );
+
+        return resourceBuilder;
+    }
 }

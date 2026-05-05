@@ -110,6 +110,23 @@ internal sealed class DokployInfrastructure(
                 string.Join(", ", skipped)
             );
 
+        // ── 5b. Filter explicitly excluded services (WithDokployExclude) ─────
+        var excludedNames = resource.Annotations
+            .OfType<DokployServiceExcludeAnnotation>()
+            .Select(a => a.ServiceName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (excludedNames.Count > 0)
+        {
+            servicesToDeploy = servicesToDeploy
+                .Where(s => !excludedNames.Contains(s.Name))
+                .ToList();
+            logger.LogInformation(
+                "Excluding service(s) from deploy (WithDokployExclude): {Names}",
+                string.Join(", ", excludedNames)
+            );
+        }
+
         logger.LogInformation(
             "Deploying {Count} service(s): {Names}",
             servicesToDeploy.Count,
@@ -1566,6 +1583,18 @@ public class DokployServiceUpdateOrderAnnotation : IResourceAnnotation
 /// If the service is NOT running (first deploy, or crashed), it is always deployed regardless.
 /// </summary>
 public class DokployServiceSkipRedeployAnnotation : IResourceAnnotation
+{
+    public required string ServiceName { get; init; }
+}
+
+/// <summary>
+/// Annotation that completely excludes a service from the Dokploy deployment pipeline.
+/// When set, the service is removed from the services-to-deploy list before any Dokploy API
+/// calls are made — the service is not updated, not redeployed, and not touched in any way.
+/// Use this for services you want to manage independently (e.g. skip openbao/keycloak during
+/// an app-only deploy). Typically driven by a CI environment variable set from a workflow input.
+/// </summary>
+public class DokployServiceExcludeAnnotation : IResourceAnnotation
 {
     public required string ServiceName { get; init; }
 }
