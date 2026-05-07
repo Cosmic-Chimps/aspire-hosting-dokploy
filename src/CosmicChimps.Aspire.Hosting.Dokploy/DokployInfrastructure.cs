@@ -116,6 +116,14 @@ internal sealed class DokployInfrastructure(
             .Select(a => a.ServiceName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // Excluded services are NOT deployed, but we still need their Dokploy appNames
+        // so that env vars in deployed services (e.g. ConnectionStrings__bella-db=Host=<appName>)
+        // are substituted correctly. Without this, excluded services' compose names remain
+        // unresolved and the deployed services cannot connect to them.
+        var excludedServices = excludedNames.Count > 0
+            ? servicesToDeploy.Where(s => excludedNames.Contains(s.Name)).ToList()
+            : [];
+
         if (excludedNames.Count > 0)
         {
             servicesToDeploy = servicesToDeploy
@@ -163,7 +171,12 @@ internal sealed class DokployInfrastructure(
 
         // ── 8b. Always load live service IDs from Dokploy ────────────────────
         //       No local state file — idempotency is driven by querying the live API.
-        await ReconcileStateAsync(environmentId, servicesToDeploy, apiClient, stateStore, ct);
+        //       Also reconcile excluded services so their appNames are in the state store
+        //       for env var substitution in deployed services.
+        var allServicesToReconcile = excludedServices.Count > 0
+            ? servicesToDeploy.Concat(excludedServices).ToList()
+            : servicesToDeploy;
+        await ReconcileStateAsync(environmentId, allServicesToReconcile, apiClient, stateStore, ct);
 
         // ── 9. PASS 1: Create all services, collect composeName → appName map ─
         //    We must do this before setting env vars because each service's env
@@ -204,6 +217,35 @@ internal sealed class DokployInfrastructure(
             "Service name map: {Map}",
             string.Join(", ", serviceNameMap.Select(kv => $"{kv.Key}→{kv.Value}"))
         );
+
+        // ── 9b. Add excluded services' appNames to service name map ──────────
+        //    Excluded services are not deployed, but their compose names appear in
+        //    env vars of deployed services (e.g. ConnectionStrings__bella-db=Host=postgres).
+        //    Without substitution, those names stay as compose names and fail to resolve
+        //    in Docker Swarm (where only Dokploy appNames are valid DNS entries).
+        if (excludedServices.Count > 0)
+        {
+            foreach (var excludedSvc in excludedServices)
+            {
+                var appName = stateStore.GetAppName(excludedSvc.Name);
+                if (appName is not null)
+                {
+                    serviceNameMap[excludedSvc.Name] = appName;
+                    logger.LogInformation(
+                        "Excluded service '{Name}' → appName '{AppName}' added to service name map",
+                        excludedSvc.Name,
+                        appName
+                    );
+                }
+                else
+                {
+                    logger.LogWarning(
+                        "Excluded service '{Name}' not found in Dokploy — env vars referencing it may be incorrect",
+                        excludedSvc.Name
+                    );
+                }
+            }
+        }
 
         // ── 10. PASS 2: Configure each service (env vars + image) then deploy ─
         foreach (var svc in servicesToDeploy)
