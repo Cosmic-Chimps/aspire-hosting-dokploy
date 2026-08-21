@@ -576,4 +576,14 @@ public class DokployApiClient
         );
         await _client.Request("api", "mounts.create").PostJsonAsync(request, cancellationToken: ct);
     }
+
+    /// <summary>Updates a mount in place — required so generated file content can change per deploy.</summary>
+    public async Task UpdateMountAsync(UpdateMountRequest request, CancellationToken ct = default)
+    {
+        _logger.LogDebug(
+            "POST mounts.update mountId={Id} mountPath={Path} type={Type}",
+            request.MountId, request.MountPath, request.Type
+        );
+        await _client.Request("api", "mounts.update").PostJsonAsync(request, cancellationToken: ct);
+    }
 }

@@ -40,4 +40,15 @@ public class DokployServiceDescriptor
 
     /// <summary>Optional per-service registry credential override.</summary>
     public Models.RegistryCredentials? Registry { get; init; }
+
+    /// <summary>
+    /// Compose <c>entrypoint:</c> override, if any. Dokploy's API has NO entrypoint field, so an
+    /// override cannot be reproduced — which matters because Aspire uses one to change how a
+    /// container is configured, not merely how it starts. Captured so the deployer can react instead
+    /// of silently dropping it.
+    /// </summary>
+    public IReadOnlyList<string> Entrypoint { get; init; } = [];
+
+    /// <summary>Compose <c>command:</c> override, if any.</summary>
+    public IReadOnlyList<string> Command { get; init; } = [];
 }

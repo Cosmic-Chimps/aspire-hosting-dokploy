@@ -74,6 +74,8 @@ public static class DokployComposeParser
             var image = SubstituteVars(rawImage, envVars);
             var envString = ParseEnvString(serviceNode, envVars);
             var ports = ParsePorts(serviceNode);
+            var entrypoint = ParseStringList(serviceNode, "entrypoint", envVars);
+            var command = ParseStringList(serviceNode, "command", envVars);
             var nativeType = DetectNativeServiceType(image);
 
             DokployDomainAnnotation? domainAnnotation = null;
@@ -89,6 +91,8 @@ public static class DokployComposeParser
                 HasExternalEndpoint = domainAnnotation is not null,
                 Domain = domainAnnotation?.Host,
                 Registry = domainAnnotation?.Registry,
+                Entrypoint = entrypoint,
+                Command = command,
             });
         }
 
@@ -269,6 +273,38 @@ public static class DokployComposeParser
         }
 
         return lines.Count > 0 ? string.Join("\n", lines) : null;
+    }
+
+    /// <summary>
+    /// Reads a compose key that may be either a scalar or a sequence of strings
+    /// (<c>entrypoint</c>/<c>command</c> accept both forms), with <c>${VAR}</c> substitution applied.
+    /// </summary>
+    private static List<string> ParseStringList(
+        YamlMappingNode serviceNode,
+        string key,
+        IReadOnlyDictionary<string, string>? envVars
+    )
+    {
+        var result = new List<string>();
+
+        if (!serviceNode.Children.TryGetValue(new YamlScalarNode(key), out var node))
+            return result;
+
+        switch (node)
+        {
+            case YamlScalarNode scalar when !string.IsNullOrWhiteSpace(scalar.Value):
+                result.Add(SubstituteVars(scalar.Value!, envVars));
+                break;
+            case YamlSequenceNode seq:
+                foreach (var item in seq.Children)
+                {
+                    if (item is YamlScalarNode s2 && !string.IsNullOrWhiteSpace(s2.Value))
+                        result.Add(SubstituteVars(s2.Value!, envVars));
+                }
+                break;
+        }
+
+        return result;
     }
 
     private static List<string> ParsePorts(YamlMappingNode service)

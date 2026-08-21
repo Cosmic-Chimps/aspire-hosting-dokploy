@@ -100,6 +100,9 @@ internal sealed class DokployInfrastructure(
         var services = DokployComposeParser.Parse(composeYaml, envVars, domainAnnotations);
         logger.LogDebug("Parsed {Count} service(s) from compose YAML", services.Count);
 
+        // ── 4b. Compensate for entrypoint overrides Dokploy cannot express ───
+        CompensateForEntrypointOverrides(resource, services);
+
         // ── 5. Filter internal Aspire services (dashboard, etc.) ─────────────
         var servicesToDeploy = services.Where(s => !IsAspireInternalService(s)).ToList();
 
@@ -1277,14 +1280,56 @@ internal sealed class DokployInfrastructure(
             // Dedup by MountPath (container path) — each container path is unique per service.
             // The DB stores the actual hostPath Dokploy assigned, so MountPath-based dedup
             // reliably prevents creating the same bind mount twice on re-deploy.
-            var existingMountPaths = existingMounts
+            var existingByPath = existingMounts
                 .Where(m => m.MountPath is not null)
-                .Select(m => m.MountPath!)
-                .ToHashSet();
+                .GroupBy(m => m.MountPath!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
             foreach (var mountAnnotation in mountAnnotations)
             {
-                if (existingMountPaths.Contains(mountAnnotation.ContainerPath))
+                var isFileMount = string.Equals(
+                    mountAnnotation.Type, "file", StringComparison.OrdinalIgnoreCase);
+
+                // A FILE mount carries content that can change between deploys, so "already exists"
+                // is not the same as "already correct" — skipping it would leave the container running
+                // stale config with nothing logged anywhere.
+                if (isFileMount
+                    && existingByPath.TryGetValue(mountAnnotation.ContainerPath, out var existingFile)
+                    && !string.Equals(existingFile.Content, mountAnnotation.Content, StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(existingFile.MountId))
+                    {
+                        // Delete-then-recreate could leave the service with NO config if the second
+                        // half fails, so refuse loudly instead of risking that.
+                        throw new InvalidOperationException(
+                            $"File mount '{mountAnnotation.ContainerPath}' on '{svc.Name}' changed but "
+                                + "Dokploy returned no mountId, so it cannot be updated in place. Remove "
+                                + "the mount in the Dokploy UI and re-deploy."
+                        );
+                    }
+
+                    logger.LogInformation(
+                        "Updating file mount '{Path}' on '{Service}' — content changed",
+                        mountAnnotation.ContainerPath, svc.Name
+                    );
+
+                    await apiClient.UpdateMountAsync(
+                        new UpdateMountRequest
+                        {
+                            MountId = existingFile.MountId!,
+                            Type = mountAnnotation.Type,
+                            MountPath = mountAnnotation.ContainerPath,
+                            ServiceType = "application",
+                            Content = mountAnnotation.Content,
+                            FilePath = mountAnnotation.FilePath
+                                ?? Path.GetFileName(mountAnnotation.ContainerPath),
+                        },
+                        ct
+                    );
+                    continue;
+                }
+
+                if (existingByPath.ContainsKey(mountAnnotation.ContainerPath))
                 {
                     logger.LogInformation(
                         "Mount '{Path}' on '{Service}' already exists — skipping",
@@ -1310,6 +1355,10 @@ internal sealed class DokployInfrastructure(
                         ServiceType = "application",
                         VolumeName = mountAnnotation.VolumeName,
                         HostPath = mountAnnotation.HostPath,
+                        Content = mountAnnotation.Content,
+                        FilePath = isFileMount
+                            ? mountAnnotation.FilePath ?? Path.GetFileName(mountAnnotation.ContainerPath)
+                            : null,
                     },
                     ct
                 );
@@ -1331,6 +1380,82 @@ internal sealed class DokployInfrastructure(
 
         var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
         return new DokployApiClient(http, loggerFactory.CreateLogger<DokployApiClient>());
+    }
+
+    /// <summary>
+    /// Dokploy's API has no <c>entrypoint</c> field, so a compose <c>entrypoint:</c> override is
+    /// silently lost — and Aspire uses one to change how a container is CONFIGURED, not just how it
+    /// starts. Every such service is reported, and the one shape we can repair is repaired.
+    ///
+    /// <para><b>YARP.</b> The image entrypoint is
+    /// <c>["dotnet","/app/yarp.dll","/etc/yarp.config"]</c> — the config path is an ARGUMENT. Aspire's
+    /// compose output replaces the entrypoint with <c>["dotnet"]</c> + <c>["/app/yarp.dll"]</c>,
+    /// dropping that argument, and supplies the route table through <c>REVERSEPROXY__*</c> environment
+    /// variables instead. On Dokploy the original entrypoint survives, so the container demands
+    /// <c>/etc/yarp.config</c>, cannot find it, and exits 2 — which is exactly how the gateway failed.</para>
+    ///
+    /// <para>The repair is to satisfy that argument with a STUB file. Verified against the real image:
+    /// with <c>{}</c> at <c>/etc/yarp.config</c> and the same env vars, YARP starts, logs
+    /// "Loading proxy data from config", and routes (<c>Executed endpoint 'route0'</c>). The env vars
+    /// remain the single source of truth — the publisher already carries them — so nothing here has to
+    /// understand, duplicate, or keep up with the route table.</para>
+    /// </summary>
+    private void CompensateForEntrypointOverrides(
+        DokployResource resource,
+        List<DokployServiceDescriptor> services
+    )
+    {
+        const string YarpConfigPath = "/etc/yarp.config";
+
+        foreach (var svc in services.Where(s => s.Entrypoint.Count > 0))
+        {
+            var isYarp =
+                svc.Command.Any(c => c.Contains("yarp.dll", StringComparison.OrdinalIgnoreCase))
+                || svc.Entrypoint.Any(e => e.Contains("yarp.dll", StringComparison.OrdinalIgnoreCase))
+                || svc.Image.Contains("/yarp", StringComparison.OrdinalIgnoreCase);
+
+            if (!isYarp)
+            {
+                logger.LogWarning(
+                    "Service '{Service}' overrides its entrypoint ({Entrypoint}) in compose, but "
+                        + "Dokploy has no entrypoint field — the override will NOT be applied and the "
+                        + "container will run its image default. If that changes how the service reads "
+                        + "its configuration, it will start misconfigured rather than fail.",
+                    svc.Name,
+                    string.Join(" ", svc.Entrypoint)
+                );
+                continue;
+            }
+
+            var alreadyDeclared = resource.Annotations
+                .OfType<DokployServiceMountAnnotation>()
+                .Any(a =>
+                    string.Equals(a.ServiceName, svc.Name, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(a.ContainerPath, YarpConfigPath, StringComparison.Ordinal));
+
+            if (alreadyDeclared)
+                continue;
+
+            logger.LogInformation(
+                "Service '{Service}' is a YARP gateway whose compose entrypoint override cannot be "
+                    + "applied on Dokploy. Mounting a stub '{Path}' so the image entrypoint is "
+                    + "satisfied; routes continue to come from the REVERSEPROXY__* environment variables.",
+                svc.Name,
+                YarpConfigPath
+            );
+
+            resource.Annotations.Add(new DokployServiceMountAnnotation
+            {
+                ServiceName = svc.Name,
+                ContainerPath = YarpConfigPath,
+                Type = "file",
+                // Deliberately empty: the route table lives in the env vars the publisher already
+                // carries. Writing routes here too would create a second source of truth that has to
+                // be kept in step with Aspire's generator.
+                Content = "{}",
+                FilePath = "yarp.config",
+            });
+        }
     }
 
     private string FindComposePath(DokployResource resource)
@@ -1670,6 +1795,12 @@ public class DokployServiceMountAnnotation : IResourceAnnotation
     /// <summary>Absolute path on the Docker host (used when Type = "bind").</summary>
     public string? HostPath { get; init; }
 
-    /// <summary>"volume" (default) or "bind".</summary>
+    /// <summary>"volume" (default), "bind", or "file".</summary>
     public string Type { get; init; } = "volume";
+
+    /// <summary>File content for Type = "file" — Dokploy materialises it on the Docker host.</summary>
+    public string? Content { get; init; }
+
+    /// <summary>Name Dokploy gives the materialised file (Type = "file").</summary>
+    public string? FilePath { get; init; }
 }
