@@ -162,6 +162,20 @@ public static class DokployComposeParser
                     continue;
             }
 
+            // A YARP cluster id is an IDENTIFIER that appears on BOTH sides of the config:
+            //   REVERSEPROXY__ROUTES__route4__CLUSTERID       = cluster_baxter-api   ← a VALUE
+            //   REVERSEPROXY__CLUSTERS__cluster_baxter-api__… = …                    ← part of a KEY
+            // Substituting values only (correct for hostnames) rewrote the first and not the second,
+            // so every route pointed at a cluster that did not exist. YARP then logs
+            // "Route 'route4' has no cluster information" and answers 503 — which is how the gateway
+            // failed after it finally started. The id never needs to be a real hostname: only the
+            // cluster's destination ADDRESS does, and that is substituted separately below.
+            if (Regex.IsMatch(key, "__CLUSTERID$", RegexOptions.IgnoreCase))
+            {
+                result.Add(line);
+                continue;
+            }
+
             // Substitute deployed service names with their Dokploy appNames
             foreach (var (composeName, appName) in ordered)
             {
@@ -332,6 +346,84 @@ public static class DokployComposeParser
 
         return ports;
     }
+
+    /// <summary>
+    /// Rewrites YARP cluster destination addresses to a concrete <c>http://host:port</c> origin.
+    ///
+    /// <para>Aspire emits them using its service-discovery scheme —
+    /// <c>https+http://baxter-api</c> — which is resolved at runtime from <c>services__&lt;name&gt;__…</c>
+    /// configuration. That does not survive this publisher: hostnames in VALUES are rewritten to
+    /// Dokploy app names, but the <c>services__&lt;name&gt;__…</c> KEYS keep the original compose name, so
+    /// the address <c>https+http://bb-baxter-api-cdbgac</c> looks for
+    /// <c>services__bb-baxter-api-cdbgac__…</c> and finds nothing. It would also prefer https on the
+    /// overlay network, where TLS terminates at the edge instead.</para>
+    ///
+    /// <para>Since the concrete origin is already present in the same env block (Aspire also emits
+    /// <c>services__x__http__0</c> and <c>X_HTTP</c> as real URLs), the port is looked up from there and
+    /// the address is made literal. That removes the discovery layer entirely rather than leaving it
+    /// half-wired — a class of failure that half-works and is hard to see.</para>
+    ///
+    /// <para>An address whose port cannot be determined is left ALONE and reported by the caller: a
+    /// guessed port would turn a clear 503 into a confusing 502.</para>
+    /// </summary>
+    public static string NormalizeYarpClusterAddresses(
+        string envString,
+        out IReadOnlyList<string> unresolved
+    )
+    {
+        var lines = envString.Split('\n');
+
+        // Any real http://host:port anywhere in the block tells us that host's port.
+        var portByHost = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in lines)
+        {
+            foreach (Match m in Regex.Matches(line, @"http://([A-Za-z0-9._-]+):(\d+)"))
+            {
+                portByHost.TryAdd(m.Groups[1].Value, m.Groups[2].Value);
+            }
+        }
+
+        var notResolved = new List<string>();
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var eq = lines[i].IndexOf('=');
+            if (eq <= 0)
+                continue;
+
+            var key = lines[i][..eq];
+            if (!key.StartsWith("REVERSEPROXY__CLUSTERS__", StringComparison.OrdinalIgnoreCase)
+                || !key.EndsWith("__ADDRESS", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = lines[i][(eq + 1)..].Trim();
+            var m = Regex.Match(
+                value,
+                @"^(?<scheme>[A-Za-z+]+)://(?<host>[^:/]+)(?::(?<port>\d+))?/?$"
+            );
+            if (!m.Success)
+                continue;
+
+            var host = m.Groups["host"].Value;
+            var port = m.Groups["port"].Success
+                ? m.Groups["port"].Value
+                : portByHost.TryGetValue(host, out var p) ? p : null;
+
+            if (port is null)
+            {
+                notResolved.Add($"{key} -> {value}");
+                continue;
+            }
+
+            lines[i] = $"{key}=http://{host}:{port}";
+        }
+
+        unresolved = notResolved;
+        return string.Join('\n', lines);
+    }
+
 }
 
 /// <summary>

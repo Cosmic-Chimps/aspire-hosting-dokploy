@@ -267,6 +267,30 @@ internal sealed class DokployInfrastructure(
                 )
                 : null;
 
+            // YARP cluster destinations must be concrete origins here — Aspire's service-discovery
+            // scheme cannot resolve once hostnames have been rewritten to Dokploy app names.
+            if (envString is not null)
+            {
+                envString = DokployComposeParser.NormalizeYarpClusterAddresses(
+                    envString,
+                    out var unresolvedClusterAddresses
+                );
+
+                foreach (var unresolved in unresolvedClusterAddresses)
+                {
+                    // Left as-is deliberately: inventing a port would turn a clear "no destination"
+                    // into a confusing 502 against the wrong one.
+                    logger.LogWarning(
+                        "Service '{Service}': could not determine a port for YARP cluster destination "
+                            + "{Address}. It is left using Aspire's service-discovery scheme, which does "
+                            + "not resolve here, so requests through that cluster will fail. Give the "
+                            + "target service an http endpoint, or set the address explicitly.",
+                        svc.Name,
+                        unresolved
+                    );
+                }
+            }
+
             var svcLabel = svc.IsNativeService
                 ? $"{svc.Name} ({svc.NativeServiceType})"
                 : $"{svc.Name}";
