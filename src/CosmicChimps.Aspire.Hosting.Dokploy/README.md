@@ -270,6 +270,54 @@ Ensure networks use `driver: overlay` for multi-host Swarm networking. The examp
 - Use `ports` for services that need external access (e.g., web frontend accessible via Traefik)
 - Use `expose` for internal services that only communicate with other services (e.g., API, databases)
 
+## Deploying the Aspire dashboard (opt-in)
+
+By default every service recognised as Aspire infrastructure is stripped from the published output:
+an image containing `aspire-dashboard`, or a service name ending in `-dashboard`. Every environment
+value that refers to a stripped service is dropped along with it, so `OTEL_EXPORTER_OTLP_ENDPOINT`
+disappears too. That is the right default — a local dashboard has no place in a deployment.
+
+It is the wrong default for a self-hosted install with no external telemetry service, where the
+dashboard is the only place to read logs and traces. Opt in:
+
+```csharp
+var dokploy = builder.PublishToDokploy("myapp", s => { /* ... */ })
+    .WithDokployDashboard(d => d.WithHostPort(18888)
+                                .WithForwardedHeaders(true));
+
+// or, equivalently, in the settings lambda:
+//   settings.DeployDashboard = true;
+```
+
+The dashboard then becomes an ordinary Dokploy application: it gets an app name, and the other
+services' `OTEL_EXPORTER_OTLP_ENDPOINT` resolves to it like any other service reference.
+
+`WithDokployDashboard` exists because `WithDashboard` is declared on
+`IResourceBuilder<DockerComposeEnvironmentResource>`, and `PublishToDokploy` creates that
+environment internally — so a caller never holds the builder it needs.
+
+### ⚠️ Do not give the dashboard a public domain
+
+The dashboard shows telemetry from every service, and **its OTLP ingest endpoint is unauthenticated
+by default** — anything that can reach it can inject or spoof telemetry. Aspire's own guidance is
+explicit: *don't expose an anonymously accessible dashboard or its endpoints to an untrusted
+network.*
+
+When you deploy it, at minimum:
+
+| Setting | Why |
+|---|---|
+| no `WithDokployDomain(...)` on it | reach it over the platform's internal network instead |
+| `Dashboard:Otlp:AuthMode=ApiKey` + `Dashboard:Otlp:PrimaryApiKey` | the default is `Unsecured` |
+| `Dashboard:Frontend:BrowserToken` set from a secret | otherwise it regenerates on every restart and you must read it back out of container logs |
+| `AllowedHosts` | DNS-rebinding defence |
+
+Note also that the published dashboard image comes from a **pre-release** image repository, and that
+its telemetry retention is bounded and in-memory — it is a live diagnostic window, not an archive.
+
+See [Aspire dashboard security considerations](https://aspire.dev/dashboard/security-considerations/)
+and [dashboard configuration](https://aspire.dev/dashboard/configuration/).
+
 ## Examples
 
 See the `example/CosmicChimps.Aspire.AppHost/` folder in the repository for a complete working example with Redis, API service, and Blazor web frontend configured for Docker Stack deployment.

@@ -53,6 +53,33 @@ public class DokploySettings
     /// Can be overridden per-service via WithRegistryCredentials().
     /// </summary>
     public RegistryCredentials? Registry { get; set; }
+
+    /// <summary>
+    /// Deploy the Aspire dashboard to Dokploy instead of filtering it out of the published output.
+    /// Default <c>false</c>, which is the historical behaviour.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By default every service recognised as Aspire infrastructure — an image containing
+    /// <c>aspire-dashboard</c>, or a service name ending in <c>-dashboard</c> — is dropped before
+    /// anything is created in Dokploy, and every environment value referring to it is dropped with
+    /// it. That is right for a local dashboard, which has no place in a deployment.
+    /// </para>
+    /// <para>
+    /// It is wrong for a self-hosted install with no external telemetry service, where the
+    /// dashboard is the only place to read logs and traces. Setting this to <c>true</c> makes the
+    /// dashboard an ordinary application service: it is created in Dokploy, and the
+    /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> of the other services resolves to its Dokploy app name
+    /// like any other service reference.
+    /// </para>
+    /// <para>
+    /// <b>The dashboard displays sensitive telemetry and its OTLP endpoint is unauthenticated by
+    /// default.</b> Deploy it without a public domain, and set <c>Dashboard:Otlp:AuthMode=ApiKey</c>
+    /// plus a frontend authentication mode. See
+    /// <see href="https://aspire.dev/dashboard/security-considerations/"/>.
+    /// </para>
+    /// </remarks>
+    public bool DeployDashboard { get; set; }
 }
 
 /// <summary>

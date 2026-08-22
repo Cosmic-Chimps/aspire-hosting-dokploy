@@ -104,13 +104,24 @@ internal sealed class DokployInfrastructure(
         CompensateForEntrypointOverrides(resource, services);
 
         // ── 5. Filter internal Aspire services (dashboard, etc.) ─────────────
-        var servicesToDeploy = services.Where(s => !IsAspireInternalService(s)).ToList();
+        //    Opt-out-able: with DeployDashboard set, the dashboard is deployed like any other
+        //    application service. Nothing else is needed to keep the other services' references to
+        //    it working — because it stays in servicesToDeploy, it gets a Dokploy appName, lands in
+        //    serviceNameMap, and OTEL_EXPORTER_OTLP_ENDPOINT is substituted normally instead of
+        //    being dropped as a reference to a skipped service (step 10).
+        var servicesToDeploy = resource.DeployDashboard
+            ? services
+            : services.Where(s => !IsAspireInternalService(s)).ToList();
 
         var skipped = services.Except(servicesToDeploy).Select(s => s.Name).ToList();
         if (skipped.Count > 0)
             logger.LogInformation(
                 "Skipping internal Aspire service(s): {Names}",
                 string.Join(", ", skipped)
+            );
+        else if (resource.DeployDashboard)
+            logger.LogInformation(
+                "DeployDashboard is set — Aspire infrastructure services are deployed rather than filtered"
             );
 
         // ── 5b. Filter explicitly excluded services (WithDokployExclude) ─────
@@ -1599,6 +1610,15 @@ internal sealed class DokployInfrastructure(
         return result;
     }
 
+    /// <summary>
+    /// Identifies services that exist for local development only and have no place in a
+    /// deployment — chiefly the Aspire dashboard.
+    /// </summary>
+    /// <remarks>
+    /// Not consulted at all when <see cref="DokployResource.DeployDashboard"/> is set; see step 5
+    /// of <c>DeployAsync</c>. The recognition is by image name as well as service name, so renaming
+    /// a resource does not smuggle a dashboard past it — the opt-in is the only supported way.
+    /// </remarks>
     private static bool IsAspireInternalService(DokployServiceDescriptor svc)
     {
         if (svc.Image?.Contains("aspire-dashboard", StringComparison.OrdinalIgnoreCase) == true)

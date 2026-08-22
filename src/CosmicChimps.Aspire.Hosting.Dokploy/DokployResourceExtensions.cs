@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Docker;
 using Aspire.Hosting.Pipelines;
 using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,6 +60,8 @@ public static class DokployResourceExtensions
             Registry = settings.Registry,
             DeployBypassToken = settings.DeployBypassToken,
             ComposeEnvironment = composeEnv.Resource,
+            ComposeEnvironmentBuilder = composeEnv,
+            DeployDashboard = settings.DeployDashboard,
         };
 
         // Register a pipeline step on the DokployResource that runs AFTER the compose YAML
@@ -125,6 +128,51 @@ public static class DokployResourceExtensions
 #pragma warning restore ASPIREPIPELINES001
 
         return builder.AddResource(dokployResource);
+    }
+
+    /// <summary>
+    /// Deploys the Aspire dashboard to Dokploy as an ordinary application service, instead of
+    /// filtering it out of the published output, and optionally configures it.
+    /// </summary>
+    /// <param name="dokployBuilder">The Dokploy resource builder returned by <see cref="PublishToDokploy"/>.</param>
+    /// <param name="configure">
+    /// Optional dashboard configuration — for example <c>d => d.WithHostPort(18888).WithForwardedHeaders(true)</c>.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// This is the opt-in described on <see cref="DokploySettings.DeployDashboard"/>. Equivalent to
+    /// setting that property; use whichever reads better at the call site.
+    /// </para>
+    /// <para>
+    /// <b>Do not give the dashboard a public domain.</b> It displays telemetry from every service,
+    /// its OTLP ingest endpoint accepts anything by default, and telemetry spoofing is a documented
+    /// threat. Reach it over the platform's internal network, and configure
+    /// <c>Dashboard:Otlp:AuthMode=ApiKey</c> with a key. See
+    /// <see href="https://aspire.dev/dashboard/security-considerations/"/>.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// var dokploy = builder.PublishToDokploy("myapp", s => { /* ... */ })
+    ///     .WithDokployDashboard(d => d.WithHostPort(18888).WithForwardedHeaders(true));
+    /// </code>
+    /// </example>
+    public static IResourceBuilder<DokployResource> WithDokployDashboard(
+        this IResourceBuilder<DokployResource> dokployBuilder,
+        Action<IResourceBuilder<DockerComposeAspireDashboardResource>>? configure = null
+    )
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
+
+        dokployBuilder.Resource.DeployDashboard = true;
+
+        var composeEnv = dokployBuilder.Resource.ComposeEnvironmentBuilder;
+        if (configure is not null)
+            composeEnv.WithDashboard(configure);
+        else
+            composeEnv.WithDashboard(enabled: true);
+
+        return dokployBuilder;
     }
 
     public static IResourceBuilder<T> WithDokployDomain<T>(

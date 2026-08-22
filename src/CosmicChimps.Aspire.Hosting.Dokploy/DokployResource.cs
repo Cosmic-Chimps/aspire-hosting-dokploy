@@ -53,5 +53,21 @@ public class DokployResource : Resource
     /// Set by DokployResourceExtensions.
     /// </summary>
     public DockerComposeEnvironmentResource ComposeEnvironment { get; set; } = null!;
+
+    /// <summary>
+    /// Builder for <see cref="ComposeEnvironment"/>. Needed because the compose environment is
+    /// created inside <c>PublishToDokploy</c>, so a caller never holds its builder — and
+    /// <c>WithDashboard</c> is declared on the builder, not the resource. Without this the
+    /// dashboard could not be configured at all for a Dokploy target.
+    /// </summary>
+    internal IResourceBuilder<DockerComposeEnvironmentResource> ComposeEnvironmentBuilder { get; set; } = null!;
+
+    /// <summary>
+    /// When true, the Aspire dashboard is deployed to Dokploy rather than filtered out.
+    /// See <see cref="DokploySettings.DeployDashboard"/> for the full rationale and the security
+    /// caveats. Set it through <c>PublishToDokploy</c>'s settings or
+    /// <c>WithDokployDashboard()</c>.
+    /// </summary>
+    public bool DeployDashboard { get; set; }
 }
 
