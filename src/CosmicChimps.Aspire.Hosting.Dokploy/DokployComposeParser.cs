@@ -7,7 +7,7 @@ namespace CosmicChimps.Aspire.Hosting.Dokploy;
 /// <summary>
 /// Parses a Docker Compose YAML file into a list of <see cref="DokployServiceDescriptor"/>s.
 /// </summary>
-public static class DokployComposeParser
+public static partial class DokployComposeParser
 {
     /// <summary>
     /// Parses a .env file (KEY=VALUE lines, # comments) into a dictionary.
@@ -176,21 +176,90 @@ public static class DokployComposeParser
                 continue;
             }
 
-            // Substitute deployed service names with their Dokploy appNames
-            foreach (var (composeName, appName) in ordered)
+            // A service name is substituted because it is a DNS name. Several env values contain the
+            // same word where it is NOT a hostname — most commonly a database username, because
+            // `AddPostgres("postgres")` produces
+            // "Host=postgres;Username=postgres;..." and the default Postgres user is also
+            // "postgres". Rewriting the username there yields
+            // 28P01: password authentication failed for user "<dokploy-app-name>", which reads like
+            // a wrong password rather than a mangled connection string.
+            if (NonHostEnvKey().IsMatch(key))
             {
-                value = Regex.Replace(
-                    value,
-                    $@"(?<![a-zA-Z0-9\-]){Regex.Escape(composeName)}(?![a-zA-Z0-9\-])",
-                    appName
-                );
+                result.Add(line);
+                continue;
             }
 
-            result.Add($"{key}={value}");
+            result.Add($"{key}={SubstituteHostsOnly(value, ordered)}");
         }
 
         return string.Join('\n', result);
     }
+
+    /// <summary>
+    /// Substitutes service names within a value, skipping the places a service name is not a host.
+    /// </summary>
+    /// <remarks>
+    /// Two shapes are protected:
+    /// <list type="bullet">
+    /// <item>
+    /// connection-string segments whose key never holds a host — <c>Username</c>, <c>Password</c>,
+    /// <c>Database</c> and friends;
+    /// </item>
+    /// <item>
+    /// URI credentials — in <c>postgresql://user:pw@host:5432/db</c> only the part after the last
+    /// <c>@</c> is a host, so a username equal to the service name is left alone.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    private static string SubstituteHostsOnly(
+        string value,
+        List<KeyValuePair<string, string>> ordered
+    )
+    {
+        // URI form: substitute only the authority that follows the credentials.
+        if (value.Contains("://", StringComparison.Ordinal) && value.Contains('@'))
+        {
+            var at = value.LastIndexOf('@');
+            return value[..(at + 1)] + Replace(value[(at + 1)..]);
+        }
+
+        // Connection-string form: per `;` segment, keyed by what the segment actually holds.
+        if (value.Contains(';'))
+        {
+            var segments = value.Split(';');
+            for (var i = 0; i < segments.Length; i++)
+                if (!NonHostConnectionStringKey().IsMatch(segments[i]))
+                    segments[i] = Replace(segments[i]);
+            return string.Join(';', segments);
+        }
+
+        return Replace(value);
+
+        string Replace(string input)
+        {
+            foreach (var (composeName, appName) in ordered)
+                input = Regex.Replace(
+                    input,
+                    $@"(?<![a-zA-Z0-9\-]){Regex.Escape(composeName)}(?![a-zA-Z0-9\-])",
+                    appName
+                );
+            return input;
+        }
+    }
+
+    /// <summary>Env var keys whose value is never a hostname (e.g. <c>MARTENDB_USERNAME</c>).</summary>
+    [GeneratedRegex(
+        "(?:^|_)(USERNAME|USER|PASSWORD|PWD|DATABASE|DATABASENAME|CATALOG|UID)$",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex NonHostEnvKey();
+
+    /// <summary>Connection-string segments whose value is never a hostname.</summary>
+    [GeneratedRegex(
+        @"^\s*(User\s*Id|UserId|Username|User|Uid|Password|Pwd|Database|Initial\s*Catalog|Catalog)\s*=",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex NonHostConnectionStringKey();
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
