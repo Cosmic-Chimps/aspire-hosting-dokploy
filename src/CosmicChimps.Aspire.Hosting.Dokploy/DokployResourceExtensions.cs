@@ -66,6 +66,7 @@ public static class DokployResourceExtensions
             ComposeEnvironment = composeEnv.Resource,
             ComposeEnvironmentBuilder = composeEnv,
             DeployDashboard = settings.DeployDashboard,
+            VerboseHttpLogging = settings.VerboseHttpLogging,
         };
 
         // Register a pipeline step on the DokployResource that runs AFTER the compose YAML

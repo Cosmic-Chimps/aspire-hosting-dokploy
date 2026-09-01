@@ -10,7 +10,7 @@ namespace CosmicChimps.Aspire.Hosting.Dokploy;
 /// <summary>
 /// HTTP client for interacting with the Dokploy API (per-service operations).
 /// </summary>
-public class DokployApiClient
+public partial class DokployApiClient
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new()
     {
@@ -22,31 +22,151 @@ public class DokployApiClient
 
     private readonly FlurlClient _client;
     private readonly ILogger<DokployApiClient> _logger;
+    private readonly bool _verboseHttp;
 
-    public DokployApiClient(HttpClient httpClient, ILogger<DokployApiClient> logger)
+    public DokployApiClient(
+        HttpClient httpClient,
+        ILogger<DokployApiClient> logger,
+        bool verboseHttp = false
+    )
     {
         _logger = logger;
+        _verboseHttp = verboseHttp;
         _client = new FlurlClient(httpClient).WithSettings(s =>
         {
             s.JsonSerializer = new DefaultJsonSerializer(JsonSerializerOptions);
         });
 
+        // Request-side diagnostics. content-length is the load-bearing field: a Dokploy validation
+        // error saying a field is "undefined" is ambiguous between "we never sent it" and "we sent it
+        // and something in between dropped it", and only the length distinguishes those.
+        _client.BeforeCall(call =>
+        {
+            var content = call.HttpRequestMessage.Content;
+            logger.LogDebug(
+                "→ Dokploy {Method} {Url} content-type={ContentType} content-length={Length}",
+                call.Request.Verb,
+                call.Request.Url,
+                content?.Headers.ContentType?.ToString() ?? "(none)",
+                content?.Headers.ContentLength?.ToString() ?? "(unset)"
+            );
+        });
+
         _client.OnError(async call =>
         {
-            if (call.Response is not null)
+            if (call.Response is null)
             {
-                var body = await call.Response.GetStringAsync();
                 logger.LogWarning(
                     call.Exception,
-                    "Dokploy API {Method} {Url} → {Status}. Body: {Body}",
+                    "Dokploy API {Method} {Url} failed with no response (transport-level)",
                     call.Request.Verb,
-                    call.Request.Url,
-                    (int)call.Response.StatusCode,
-                    body
+                    call.Request.Url
                 );
+                return;
             }
+
+            var responseBody = await call.Response.GetStringAsync();
+
+            // The URI the request FINALLY reached. A difference from the configured URL is a prime
+            // suspect for a lost body: HttpClient turns POST into GET on a 301/302/303 and drops the
+            // payload doing it, while 307/308 preserve both.
+            var finalUri = call.Response.ResponseMessage?.RequestMessage?.RequestUri?.ToString();
+            var redirected =
+                finalUri is not null
+                && !string.Equals(
+                    finalUri,
+                    call.Request.Url.ToString(),
+                    StringComparison.OrdinalIgnoreCase
+                );
+
+            string requestBody;
+            var requestContent = call.HttpRequestMessage.Content;
+            try
+            {
+                var raw =
+                    requestContent is null ? "(no content)" : await requestContent.ReadAsStringAsync();
+                requestBody = _verboseHttp ? raw : Redact(raw);
+            }
+            catch (Exception ex)
+            {
+                requestBody = $"(could not read request body: {ex.Message})";
+            }
+
+            logger.LogWarning(
+                call.Exception,
+                "Dokploy API {Method} {Url} → {Status}\n"
+                    + "  request  content-type  : {ContentType}\n"
+                    + "  request  content-length: {Length}\n"
+                    + "  request  body          : {RequestBody}\n"
+                    + "  final    uri           : {FinalUri}{RedirectNote}\n"
+                    + "  response server        : {Server}\n"
+                    + "  response content-type  : {ResponseContentType}\n"
+                    + "  response body          : {ResponseBody}",
+                call.Request.Verb,
+                call.Request.Url,
+                (int)call.Response.StatusCode,
+                requestContent?.Headers.ContentType?.ToString() ?? "(none)",
+                requestContent?.Headers.ContentLength?.ToString() ?? "(unset)",
+                requestBody,
+                finalUri ?? "(unknown)",
+                redirected ? "   ⚠ REDIRECTED — a 301/302/303 drops the POST body" : string.Empty,
+                HeaderOrNone(call.Response, "Server"),
+                call.Response.ResponseMessage?.Content?.Headers.ContentType?.ToString() ?? "(none)",
+                responseBody
+            );
+
+            if (!_verboseHttp)
+                logger.LogInformation(
+                    "The request body above is redacted. Set DokploySettings.VerboseHttpLogging = "
+                        + "true to log it verbatim — it may contain registry credentials and service "
+                        + "environment variables, so do not leave it on."
+                );
         });
     }
+
+    private static string HeaderOrNone(IFlurlResponse response, string name) =>
+        response.Headers.TryGetFirst(name, out var value) ? value : "(none)";
+
+    /// <summary>
+    /// Masks secrets so a failed call can be diagnosed from a shared CI log. Structure is preserved,
+    /// which is the part that matters for "the server says this field is missing".
+    /// </summary>
+    /// <remarks>
+    /// Two passes, because secrets reach Dokploy in two shapes: as JSON properties
+    /// (<c>"password": "..."</c>) and — the one that is easy to miss — as <c>KEY=value</c> lines
+    /// packed inside a single <c>env</c> string, which is how application environment variables are
+    /// sent. Redacting only JSON property names leaks every service secret in the deploy payload.
+    /// </remarks>
+    private static string Redact(string body) =>
+        string.IsNullOrEmpty(body)
+            ? "(empty)"
+            : SecretEnvAssignment()
+                .Replace(SecretJsonProperty().Replace(body, "$1\"***\""), "$1=***");
+
+    /// <summary>JSON properties whose NAME looks secret: <c>"password": "x"</c> → <c>"password": "***"</c>.</summary>
+    /// <remarks>
+    /// Ends with <c>["]</c> rather than a bare <c>"</c> deliberately. Written as a bare quote, the
+    /// raw-string delimiter absorbs it, the match stops short of the closing quote, and the
+    /// replacement emits <c>"key":"***""</c> — invalid JSON in the very diagnostic meant to reveal a
+    /// malformed body.
+    /// </remarks>
+    [System.Text.RegularExpressions.GeneratedRegex(
+        """("(?:[^"]*(?:password|passwd|token|secret|apikey|api_key|signingkey|key)[^"]*)"\s*:\s*)"[^"]*["]""",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+    )]
+    private static partial System.Text.RegularExpressions.Regex SecretJsonProperty();
+
+    /// <summary>
+    /// <c>KEY=value</c> assignments inside a string value, as Dokploy's <c>env</c> blob carries them.
+    /// The value runs to the next escaped newline or the closing quote.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(
+        """([A-Za-z0-9_.:-]*(?:PASSWORD|PASSWD|TOKEN|SECRET|APIKEY|API_KEY|SIGNINGKEY|KEY)[A-Za-z0-9_.:-]*)=(?:(?!\\n|\\r|["])[^"])*""",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+    )]
+    private static partial System.Text.RegularExpressions.Regex SecretEnvAssignment();
+
+
 
     // ─── Projects ────────────────────────────────────────────────────────────
 

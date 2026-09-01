@@ -1420,8 +1420,21 @@ internal sealed class DokployInfrastructure(
         if (!string.IsNullOrWhiteSpace(resource.DeployBypassToken))
             http.DefaultRequestHeaders.Add("X-Deploy-Token", resource.DeployBypassToken);
 
+        // Never the token itself — only whether one is present, and how long it is. A truncated or
+        // whitespace-padded token is a real failure mode and this is enough to spot it.
+        logger.LogDebug(
+            "Dokploy API client: base={Base} apiKey={KeyState} bypassToken={BypassState}",
+            http.BaseAddress,
+            resource.ApiToken.Length > 0 ? $"present ({resource.ApiToken.Length} chars)" : "MISSING",
+            string.IsNullOrWhiteSpace(resource.DeployBypassToken) ? "not set" : "present"
+        );
+
         var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
-        return new DokployApiClient(http, loggerFactory.CreateLogger<DokployApiClient>());
+        return new DokployApiClient(
+            http,
+            loggerFactory.CreateLogger<DokployApiClient>(),
+            resource.VerboseHttpLogging
+        );
     }
 
     /// <summary>

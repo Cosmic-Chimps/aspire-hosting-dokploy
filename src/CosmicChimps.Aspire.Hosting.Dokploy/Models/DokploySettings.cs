@@ -80,6 +80,23 @@ public class DokploySettings
     /// </para>
     /// </remarks>
     public bool DeployDashboard { get; set; }
+
+    /// <summary>
+    /// Log full HTTP request and response bodies for failed Dokploy API calls. Default <c>false</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Failed calls are always logged with the status, the final URI, the request's content-type and
+    /// content-length, and the response body — enough to tell "we never sent the field" apart from
+    /// "we sent it and it did not arrive". The request body is <b>redacted</b> in that output.
+    /// </para>
+    /// <para>
+    /// Set this to <c>true</c> to log it verbatim. Request bodies carry registry credentials and
+    /// service environment variables, so this is for diagnosing a specific failure, not for leaving
+    /// on.
+    /// </para>
+    /// </remarks>
+    public bool VerboseHttpLogging { get; set; }
 }
 
 /// <summary>

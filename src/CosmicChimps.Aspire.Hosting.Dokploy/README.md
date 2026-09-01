@@ -270,6 +270,45 @@ Ensure networks use `driver: overlay` for multi-host Swarm networking. The examp
 - Use `ports` for services that need external access (e.g., web frontend accessible via Traefik)
 - Use `expose` for internal services that only communicate with other services (e.g., API, databases)
 
+## Diagnosing a failed API call
+
+Every failed Dokploy API call logs, at Warning level:
+
+```
+Dokploy API POST https://paas.example.com/api/project.create → 400
+  request  content-type  : application/json; charset=UTF-8
+  request  content-length: 28
+  request  body          : {"name":"myapp"}
+  final    uri           : https://paas.example.com/api/project.create
+  response server        : traefik
+  response content-type  : application/json
+  response body          : {"message":"Input failed",...}
+```
+
+Three of those fields exist for a specific reason:
+
+- **`content-length`** tells "we never sent the field" apart from "we sent it and it did not arrive".
+  A Dokploy zod error reading `expected string, received undefined` is ambiguous without it.
+- **`final uri`** is the URI the request actually reached. If it differs from the configured URL the
+  line is flagged `⚠ REDIRECTED` — a 301/302/303 makes `HttpClient` turn POST into GET and **drop the
+  body**, which produces exactly that zod error. 307/308 preserve both.
+- **`response server`** identifies what answered, so a proxy error page is not mistaken for Dokploy.
+
+The request body is **redacted** by default: values whose JSON key looks secret, and `KEY=value`
+assignments inside the `env` blob, are replaced with `***`. To see it verbatim while chasing a
+specific failure:
+
+```csharp
+builder.PublishToDokploy("myapp", s => { s.VerboseHttpLogging = true; });
+```
+
+Request bodies carry registry credentials and every service environment variable, so turn it off
+again afterwards.
+
+Set the log level to `Debug` for `CosmicChimps.Aspire.Hosting.Dokploy` to also see each outgoing
+request and the resolved API base address (never the token — only whether one is present, and its
+length, which is enough to spot a truncated secret).
+
 ## Configuring with Aspire parameters
 
 Every deployment setting accepts either a literal string or an Aspire **parameter**, resolved when

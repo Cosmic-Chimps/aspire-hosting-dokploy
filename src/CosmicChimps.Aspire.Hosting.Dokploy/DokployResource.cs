@@ -106,6 +106,12 @@ public class DokployResource : Resource
     internal IResourceBuilder<DockerComposeEnvironmentResource> ComposeEnvironmentBuilder { get; set; } = null!;
 
     /// <summary>
+    /// Log full HTTP bodies for failed Dokploy API calls. See
+    /// <see cref="DokploySettings.VerboseHttpLogging"/>.
+    /// </summary>
+    public bool VerboseHttpLogging { get; set; }
+
+    /// <summary>
     /// When true, the Aspire dashboard is deployed to Dokploy rather than filtered out.
     /// See <see cref="DokploySettings.DeployDashboard"/> for the full rationale and the security
     /// caveats. Set it through <c>PublishToDokploy</c>'s settings or
