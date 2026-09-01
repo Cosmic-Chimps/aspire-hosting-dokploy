@@ -247,9 +247,13 @@ public static partial class DokployComposeParser
         }
     }
 
-    /// <summary>Env var keys whose value is never a hostname (e.g. <c>MARTENDB_USERNAME</c>).</summary>
+    /// <summary>
+    /// Env var keys whose value is never a hostname — e.g. <c>MARTENDB_USERNAME</c>, or
+    /// <c>OTEL_SERVICE_NAME</c>, which is a telemetry label. Substituting the latter renamed every
+    /// resource in the dashboard to its Dokploy app name (<c>api</c> → <c>i2t-api-olfgr7</c>).
+    /// </summary>
     [GeneratedRegex(
-        "(?:^|_)(USERNAME|USER|PASSWORD|PWD|DATABASE|DATABASENAME|CATALOG|UID)$",
+        "(?:^|_)(USERNAME|USER|PASSWORD|PWD|DATABASE|DATABASENAME|CATALOG|UID|SERVICE_NAME|SERVICENAME)$",
         RegexOptions.IgnoreCase
     )]
     private static partial Regex NonHostEnvKey();

@@ -82,6 +82,20 @@ public class ServiceNameSubstitutionTests
     }
 
     [Fact]
+    public void LeavesTelemetryLabelsAlone()
+    {
+        // OTEL_SERVICE_NAME is a label, not a DNS name. Substituting it renamed every resource in
+        // the Aspire dashboard to its Dokploy app name — "api" became "i2t-api-olfgr7".
+        Assert.Equal("OTEL_SERVICE_NAME=api",
+            DokployComposeParser.ApplyServiceNameSubstitution("OTEL_SERVICE_NAME=api", Map));
+
+        // ...while the endpoint on the same service must still be rewritten, or nothing resolves.
+        Assert.Equal("OTEL_EXPORTER_OTLP_ENDPOINT=http://i2t-postgres-u6npej:18889",
+            DokployComposeParser.ApplyServiceNameSubstitution(
+                "OTEL_EXPORTER_OTLP_ENDPOINT=http://postgres:18889", Map));
+    }
+
+    [Fact]
     public void DoesNotSubstitutePartialWordMatches()
     {
         // "martendb" contains "db"; "postgresql" contains "postgres".
@@ -89,5 +103,41 @@ public class ServiceNameSubstitutionTests
 
         Assert.Equal("X=Database=martendb",
             DokployComposeParser.ApplyServiceNameSubstitution("X=Database=martendb", map));
+    }
+
+    /// <summary>
+    /// A semicolon-separated allow-list is substituted segment by segment, so a service name listed
+    /// in it reaches the deployed container as the Dokploy app name the senders actually resolve.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the dashboard's <c>AllowedHosts</c> workable. ASP.NET Core host filtering
+    /// runs <b>before</b> authentication and applies to the whole app, OTLP ingest ports included —
+    /// so an allow-list naming only the public domain and loopback rejected every telemetry sender
+    /// with <c>400 Bad Request - Invalid Hostname</c>, on both 18889 and 18890, before the API key or
+    /// the payload was ever looked at. The symptom was an empty dashboard with no error anywhere:
+    /// senders were rejected at the front door, and OpenTelemetry reports export failures on an
+    /// EventSource rather than to the logger.
+    /// </remarks>
+    [Fact]
+    public void SubstitutesServiceNamesInsideASemicolonSeparatedAllowList()
+    {
+        const string line =
+            "AllowedHosts=dash.example.com;localhost;127.0.0.1;imperva2terraform-compose-dashboard";
+
+        var result = DokployComposeParser.ApplyServiceNameSubstitution(
+            line,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["imperva2terraform-compose-dashboard"] =
+                    "i2t-imperva2terraform-compose-dashboard-fh9lhz",
+            }
+        );
+
+        Assert.Contains("i2t-imperva2terraform-compose-dashboard-fh9lhz", result);
+        // The rest of the list must survive untouched — the domain is how a browser reaches it and
+        // loopback is how an SSH tunnel does.
+        Assert.Contains("dash.example.com", result);
+        Assert.Contains("localhost", result);
+        Assert.Contains("127.0.0.1", result);
     }
 }
