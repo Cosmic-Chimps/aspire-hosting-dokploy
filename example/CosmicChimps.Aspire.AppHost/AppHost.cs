@@ -3,25 +3,38 @@ using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+// ── Deployment configuration as Aspire parameters (issue #1) ─────────────────
+// Every Dokploy setting takes either a literal or an Aspire parameter. Parameters are the better
+// home for deployment configuration: they are prompted for when missing, can be marked secret,
+// vary per environment, and appear in the manifest — none of which reading IConfiguration at
+// model-build time gives you.
+//
+// Supply them however Aspire parameters are normally supplied, e.g.
+//   dotnet user-secrets set Parameters:dokploy-url https://paas.example.com
+//   Parameters__dokploy-token=... aspire deploy
+//
+var dokployUrl = builder.AddParameter("dokploy-url");
+var dokployToken = builder.AddParameter("dokploy-token", secret: true);
+var registryUrl = builder.AddParameter("registry-url");
+var registryUsername = builder.AddParameter("registry-username");
+var registryPassword = builder.AddParameter("registry-password", secret: true);
+
 // ── Push: Aspire-native registry (handles docker build + push) ────────────────
 // Aspire's pipeline builds images and pushes them to this registry BEFORE deploying.
 // The registry-qualified image name (e.g. "docker.io/cosmicchimps/apiservice:tag")
 // is then written to .env.Production and our Dokploy deployer reads it from there.
 //
-// For login, either:
+// AddContainerRegistry takes NO credentials — its overloads are (name, endpoint, repository). The
+// push is authenticated by the ambient docker login, either:
 //   a) Pre-authenticate: `docker login docker.io` before running `aspire deploy`
 //   b) Set DOTNET_DOCKER_REGISTRY_USERNAME / DOTNET_DOCKER_REGISTRY_PASSWORD env vars
+// The credentials on settings.Registry below are a different thing: they are what Dokploy stores
+// and reuses to PULL, including when it restarts a service long after the deploy finished.
 //
 #pragma warning disable ASPIRECOMPUTE003
-builder.AddContainerRegistry(
-    "my-registry",
-    endpoint: builder.Configuration["DockerHub:RegistryUrl"]
-        ?? Environment.GetEnvironmentVariable("DOCKERHUB_REGISTRY_URL")
-        ?? throw new InvalidOperationException("DockerHub Registry Url not configured"),
-    repository: builder.Configuration["DockerHub:Username"]
-        ?? Environment.GetEnvironmentVariable("DOCKERHUB_USERNAME")
-        ?? throw new InvalidOperationException("DockerHub Username not configured")
-);
+// AddContainerRegistry has its own parameter overload — endpoint and repository must both be
+// parameters or both be strings, they cannot be mixed.
+builder.AddContainerRegistry("my-registry", endpoint: registryUrl, repository: registryUsername);
 #pragma warning restore ASPIRECOMPUTE003
 
 // ── Dokploy: register as publish target ──────────────────────────────────────
@@ -41,35 +54,26 @@ var dokploy = builder.PublishToDokploy(
     "demo-aspire",
     settings =>
     {
-        settings.DokployUrl =
-            builder.Configuration["Dokploy:Url"]
-            ?? Environment.GetEnvironmentVariable("DOKPLOY_URL")
-            ?? throw new InvalidOperationException("Dokploy URL not configured");
-        settings.ApiToken =
-            builder.Configuration["Dokploy:ApiToken"]
-            ?? Environment.GetEnvironmentVariable("DOKPLOY_API_TOKEN")
-            ?? throw new InvalidOperationException("Dokploy API token not configured");
+        // Parameters, resolved when the deployment runs — not now, while the model is built.
+        // `.AsDokployValue()` is needed because C# forbids implicit conversions from an interface
+        // type and AddParameter returns IResourceBuilder<ParameterResource>. `.Resource` works too.
+        settings.DokployUrl = dokployUrl.AsDokployValue();
+        settings.ApiToken = dokployToken.AsDokployValue();
 
+        // Literals still assign directly — mix the two freely.
         settings.ProjectName = "demo-aspire";
         settings.EnvironmentName = environmentName; // "production" | "staging" | "dev"
         settings.AppNamePrefix = "da-";
 
-        // Pull credentials: Dokploy server needs these to `docker pull` from a private registry.
+        // Pull credentials: Dokploy needs these to `docker pull` from a private registry.
         // ImagePrefix must match the `repository` argument passed to AddContainerRegistry above.
-        var username = builder.Configuration["DockerHub:Username"]
-            ?? Environment.GetEnvironmentVariable("DOCKERHUB_USERNAME");
-        var password = builder.Configuration["DockerHub:Password"]
-            ?? Environment.GetEnvironmentVariable("DOCKERHUB_PASSWORD");
-        if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
+        settings.Registry = new RegistryCredentials
         {
-            settings.Registry = new RegistryCredentials
-            {
-                RegistryUrl = "docker.io",
-                ImagePrefix = username,
-                Username = username,
-                Password = password,
-            };
-        }
+            RegistryUrl = registryUrl.AsDokployValue(),
+            ImagePrefix = registryUsername.AsDokployValue(),
+            Username = registryUsername.AsDokployValue(),
+            Password = registryPassword.AsDokployValue(),
+        };
     }
 );
 
