@@ -42,23 +42,27 @@ public static class DokployResourceExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var settings = new DokploySettings { ProjectName = name };
+        var settings = new DokploySettings();
         configure?.Invoke(settings);
 
         var composeEnv = builder.AddDockerComposeEnvironment($"{name}-compose");
 
         var dokployResource = new DokployResource(name)
         {
-            DokployUrl = settings.DokployUrl,
-            ApiToken = settings.ApiToken,
-            ProjectName = settings.ProjectName,
-            EnvironmentName = string.IsNullOrWhiteSpace(settings.EnvironmentName)
-                ? "production"
-                : settings.EnvironmentName,
-            AppNamePrefix = settings.AppNamePrefix,
-            ServerId = settings.ServerId,
-            Registry = settings.Registry,
-            DeployBypassToken = settings.DeployBypassToken,
+            // Deferred: stored, not read. A DokploySettings value may be an Aspire parameter, which
+            // cannot be resolved here — the model is still being built. DokployResource
+            // .ResolveConfigurationAsync materialises all of these when the deploy step runs.
+            // Defaults (project name, "production") are applied there too, for the same reason:
+            // a parameter's emptiness is not knowable yet.
+            DokployUrlSource = settings.DokployUrl,
+            ApiTokenSource = settings.ApiToken,
+            ProjectNameSource = settings.ProjectName,
+            DefaultProjectName = name,
+            EnvironmentNameSource = settings.EnvironmentName,
+            AppNamePrefixSource = settings.AppNamePrefix,
+            ServerIdSource = settings.ServerId,
+            RegistrySource = settings.Registry,
+            DeployBypassTokenSource = settings.DeployBypassToken,
             ComposeEnvironment = composeEnv.Resource,
             ComposeEnvironmentBuilder = composeEnv,
             DeployDashboard = settings.DeployDashboard,
@@ -185,8 +189,67 @@ public static class DokployResourceExtensions
     )
         where T : IResource
     {
-        ArgumentNullException.ThrowIfNull(dokployBuilder);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        return resourceBuilder.WithDokployDomainCore(
+            dokployBuilder,
+            DokployValue.FromLiteral(host),
+            https,
+            certificateType,
+            port
+        );
+    }
+
+    /// <summary>
+    /// Configures the public domain from an Aspire <see cref="ParameterResource"/>, resolved when
+    /// the deployment runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The literal overload requires the hostname to exist while the application model is being
+    /// built, which pushes deployment configuration into <c>IConfiguration</c> where it does not
+    /// belong (issue #1). A parameter can be prompted for, marked secret, varied per environment,
+    /// and appears in the manifest.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// var portalUrl = builder.AddParameter("portal-url");
+    ///
+    /// builder.AddNextJsApp("web", "./apps/web")
+    ///        .WithDokployDomain(dokploy, portalUrl, https: true, certificateType: "letsencrypt");
+    /// </code>
+    /// </example>
+    public static IResourceBuilder<T> WithDokployDomain<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        IResourceBuilder<ParameterResource> host,
+        bool https = true,
+        string certificateType = "letsencrypt",
+        int? port = null
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        return resourceBuilder.WithDokployDomainCore(
+            dokployBuilder,
+            DokployValue.FromParameter(host),
+            https,
+            certificateType,
+            port
+        );
+    }
+
+    private static IResourceBuilder<T> WithDokployDomainCore<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<DokployResource> dokployBuilder,
+        DokployValue host,
+        bool https,
+        string certificateType,
+        int? port
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(dokployBuilder);
 
         dokployBuilder.Resource.Annotations.Add(
             new DokployServiceDomainAnnotation
@@ -194,7 +257,9 @@ public static class DokployResourceExtensions
                 ServiceName = resourceBuilder.Resource.Name,
                 Domain = new DokployDomainAnnotation
                 {
-                    Host = host,
+                    // Host stays empty until the deploy step resolves HostSource into it.
+                    Host = string.Empty,
+                    HostSource = host,
                     Https = https,
                     CertificateType = certificateType,
                     Port = port,

@@ -270,6 +270,57 @@ Ensure networks use `driver: overlay` for multi-host Swarm networking. The examp
 - Use `ports` for services that need external access (e.g., web frontend accessible via Traefik)
 - Use `expose` for internal services that only communicate with other services (e.g., API, databases)
 
+## Configuring with Aspire parameters
+
+Every deployment setting accepts either a literal string or an Aspire **parameter**, resolved when
+the deployment runs rather than when the application model is built. Parameters can be prompted for,
+marked secret, varied per environment, and appear in the manifest — none of which `IConfiguration`
+gives you ([#1](https://github.com/Cosmic-Chimps/aspire-hosting-dokploy/issues/1)).
+
+```csharp
+var portalUrl    = builder.AddParameter("portal-url");
+var dokployUrl   = builder.AddParameter("dokploy-url");
+var dokployToken = builder.AddParameter("dokploy-token", secret: true);
+var registryPw   = builder.AddParameter("registry-password", secret: true);
+
+var dokploy = builder.PublishToDokploy("myapp", s =>
+{
+    s.DokployUrl = dokployUrl.AsDokployValue();
+    s.ApiToken   = dokployToken.AsDokployValue();
+
+    s.Registry = new RegistryCredentials
+    {
+        RegistryUrl = "ghcr.io",             // literals still work everywhere
+        ImagePrefix = "ghcr.io/myorg",
+        Username    = "myorg",
+        Password    = registryPw.AsDokployValue(),
+    };
+});
+
+builder.AddNextJsApp("web", "./apps/web")
+       .WithDokployDomain(dokploy, portalUrl, https: true, certificateType: "letsencrypt");
+```
+
+**Both forms are supported on every setting.** Strings convert implicitly, so existing code is
+unchanged:
+
+```csharp
+s.DokployUrl = "https://paas.example.com";   // still fine
+```
+
+Two ways to pass a parameter, because C# does not allow implicit conversions from an interface type
+and `AddParameter` returns `IResourceBuilder<ParameterResource>`:
+
+| Form | Use |
+|---|---|
+| `param.AsDokployValue()` | assigning to a `DokploySettings` / `RegistryCredentials` property |
+| `param.Resource` | same thing, via the implicit `ParameterResource` conversion |
+| `WithDokployDomain(dokploy, param, ...)` | domains take the builder directly — no helper needed |
+
+Resolution happens exactly once, at the start of the deploy step. Nothing downstream of that ever
+sees an unresolved parameter, and a deferred value's `ToString()` renders as `<parameter:name>` — so
+a secret cannot leak into a log line even by accident.
+
 ## Deploying the Aspire dashboard (opt-in)
 
 By default every service recognised as Aspire infrastructure is stripped from the published output:

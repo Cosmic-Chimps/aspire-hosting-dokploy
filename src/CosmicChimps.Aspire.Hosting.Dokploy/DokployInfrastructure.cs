@@ -26,6 +26,13 @@ internal sealed class DokployInfrastructure(
     {
         Validate(resource);
 
+        // ── 0. Resolve deferred configuration ────────────────────────────────
+        // Settings may be Aspire parameters rather than literals (issue #1), and a parameter can
+        // only be read asynchronously once deployment is under way. Everything after this line sees
+        // plain strings, so no code path downstream can stringify an unresolved parameter into an
+        // API request or a log line.
+        await resource.ResolveConfigurationAsync(ct);
+
         logger.LogInformation(
             "Starting per-service Dokploy deployment for '{Name}' → {Url}",
             resource.Name,
@@ -50,7 +57,7 @@ internal sealed class DokployInfrastructure(
         logger.LogDebug("Loaded {Count} env vars for substitution", envVars.Count);
 
         // ── 3. Collect domain annotations (from WithDomain() calls) ──────────
-        var domainAnnotations = CollectDomainAnnotations(resource);
+        var domainAnnotations = await CollectDomainAnnotationsAsync(resource, ct);
         if (domainAnnotations.Count > 0)
             logger.LogDebug(
                 "Domain annotations: {Domains}",
@@ -1543,15 +1550,48 @@ internal sealed class DokployInfrastructure(
         return [];
     }
 
-    private static Dictionary<string, DokployDomainAnnotation> CollectDomainAnnotations(
-        DokployResource resource
+    /// <summary>
+    /// Collects domain annotations, resolving each host from its deferred source.
+    /// </summary>
+    /// <remarks>
+    /// Returns copies with <c>Host</c> materialised, so the compose parser and everything after it
+    /// keep working with plain strings and need no knowledge of parameters (issue #1). An annotation
+    /// created through the literal overload already carries a literal source, so both paths converge
+    /// here.
+    /// </remarks>
+    private static async Task<Dictionary<string, DokployDomainAnnotation>> CollectDomainAnnotationsAsync(
+        DokployResource resource,
+        CancellationToken ct
     )
     {
         var result = new Dictionary<string, DokployDomainAnnotation>(
             StringComparer.OrdinalIgnoreCase
         );
+
         foreach (var annotation in resource.Annotations.OfType<DokployServiceDomainAnnotation>())
-            result[annotation.ServiceName] = annotation.Domain;
+        {
+            var domain = annotation.Domain;
+            var host = domain.HostSource is not null
+                ? await domain.HostSource.GetValueAsync(ct)
+                : domain.Host;
+
+            if (string.IsNullOrWhiteSpace(host))
+                throw new InvalidOperationException(
+                    $"The Dokploy domain configured for service '{annotation.ServiceName}' resolved "
+                        + "to an empty hostname. Supply a literal host or an Aspire parameter with a value."
+                );
+
+            result[annotation.ServiceName] = new DokployDomainAnnotation
+            {
+                Host = host,
+                HostSource = domain.HostSource,
+                Https = domain.Https,
+                CertificateType = domain.CertificateType,
+                Port = domain.Port,
+                Registry = domain.Registry,
+            };
+        }
+
         return result;
     }
 

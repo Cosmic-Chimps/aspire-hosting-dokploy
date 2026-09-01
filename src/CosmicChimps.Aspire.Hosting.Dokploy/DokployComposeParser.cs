@@ -431,9 +431,22 @@ public static class DokployComposeParser
 /// </summary>
 public class DokployDomainAnnotation
 {
-    public required string Host { get; init; }
+    /// <summary>
+    /// The resolved hostname. Empty until the deploy step resolves <see cref="HostSource"/> into it
+    /// — read this, never <see cref="HostSource"/>, from anywhere downstream of that step.
+    /// </summary>
+    public string Host { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The hostname as configured: a literal or an Aspire parameter (issue #1). Resolved once at the
+    /// start of the deploy step, because a parameter cannot be read while the model is being built.
+    /// </summary>
+    public DokployValue? HostSource { get; init; }
     public bool Https { get; init; } = true;
     public string CertificateType { get; init; } = "letsencrypt";
     public int? Port { get; init; }
-    public Models.RegistryCredentials? Registry { get; init; }
+    /// <summary>Per-service registry override, already resolved. Currently never populated —
+    /// there is no public API to set it (the <c>WithRegistryCredentials()</c> named in
+    /// DokploySettings' docs does not exist), so the target-level registry always applies.</summary>
+    public Models.ResolvedRegistryCredentials? Registry { get; init; }
 }

@@ -39,7 +39,7 @@ public class DokployServiceDescriptor
     public string? Domain { get; init; }
 
     /// <summary>Optional per-service registry credential override.</summary>
-    public Models.RegistryCredentials? Registry { get; init; }
+    public Models.ResolvedRegistryCredentials? Registry { get; init; }
 
     /// <summary>
     /// Compose <c>entrypoint:</c> override, if any. Dokploy's API has NO entrypoint field, so an

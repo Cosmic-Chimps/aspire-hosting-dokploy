@@ -8,36 +8,36 @@ public class DokploySettings
     /// <summary>
     /// The base URL of the Dokploy instance (e.g., "https://paas.example.com").
     /// </summary>
-    public string DokployUrl { get; set; } = string.Empty;
+    public DokployValue? DokployUrl { get; set; }
 
     /// <summary>
     /// The API token. Generate at Dokploy → Settings → Profile → API/CLI.
     /// </summary>
-    public string ApiToken { get; set; } = string.Empty;
+    public DokployValue? ApiToken { get; set; }
 
     /// <summary>
     /// The Dokploy project name. Created automatically if it doesn't exist.
     /// Find existing project names in the Dokploy dashboard URL.
     /// </summary>
-    public string ProjectName { get; set; } = string.Empty;
+    public DokployValue? ProjectName { get; set; }
 
     /// <summary>
     /// Target environment within the Dokploy project (e.g. "production", "staging").
     /// Created automatically if it doesn't exist within the project.
     /// Defaults to "production".
     /// </summary>
-    public string EnvironmentName { get; set; } = "production";
+    public DokployValue? EnvironmentName { get; set; }
 
     /// <summary>
     /// App name prefix used when auto-generating Dokploy app names (default: "").
     /// </summary>
-    public string AppNamePrefix { get; set; } = string.Empty;
+    public DokployValue? AppNamePrefix { get; set; }
 
     /// <summary>
     /// Optional server ID for deployment to a specific Dokploy server.
     /// Leave null to use the default server.
     /// </summary>
-    public string? ServerId { get; set; }
+    public DokployValue? ServerId { get; set; }
 
     /// <summary>
     /// Optional secret token sent as <c>X-Deploy-Token</c> on every API request.
@@ -46,7 +46,7 @@ public class DokploySettings
     /// Works with Cloudflare (WAF Custom Rule), Nginx, Traefik, Caddy, HAProxy, etc.
     /// Store the value in a CI secret and pass it via this setting.
     /// </summary>
-    public string? DeployBypassToken { get; set; }
+    public DokployValue? DeployBypassToken { get; set; }
 
     /// <summary>
     /// Optional registry credentials applied to all application services.
@@ -87,11 +87,14 @@ public class DokploySettings
 /// </summary>
 public class RegistryCredentials
 {
+    // Each of these accepts a literal string or an Aspire parameter (issue #1). The password in
+    // particular belongs in a secret parameter rather than IConfiguration.
+
     /// <summary>
     /// Registry hostname shown in Dokploy's "Registry URL" field.
     /// Examples: <c>"docker.io"</c>, <c>"ghcr.io"</c>, <c>"myregistry.azurecr.io"</c>.
     /// </summary>
-    public string? RegistryUrl { get; set; }
+    public DokployValue? RegistryUrl { get; set; }
 
     /// <summary>
     /// Prefix prepended to local image names to form the fully-qualified image reference
@@ -103,11 +106,45 @@ public class RegistryCredentials
     ///   <item>ACR:        <c>"myregistry.azurecr.io"</c> → <c>myregistry.azurecr.io/apiservice:latest</c></item>
     /// </list>
     /// </summary>
-    public string? ImagePrefix { get; set; }
+    public DokployValue? ImagePrefix { get; set; }
 
     /// <summary>Registry username for Dokploy pull authentication.</summary>
-    public string? Username { get; set; }
+    public DokployValue? Username { get; set; }
 
     /// <summary>Registry password or access token for Dokploy pull authentication.</summary>
-    public string? Password { get; set; }
+    public DokployValue? Password { get; set; }
+}
+
+/// <summary>
+/// Registry credentials after resolution, as the deployment consumes them.
+/// </summary>
+/// <remarks>
+/// Deliberately mirrors <see cref="RegistryCredentials"/> property-for-property. The split is what
+/// keeps deferred values (parameters) out of the deployment code path entirely: everything past the
+/// resolve step at the start of <c>DeployAsync</c> sees plain strings and cannot accidentally
+/// stringify an unresolved parameter into a request.
+/// </remarks>
+public sealed class ResolvedRegistryCredentials
+{
+    public string? RegistryUrl { get; init; }
+    public string? ImagePrefix { get; init; }
+    public string? Username { get; init; }
+    public string? Password { get; init; }
+
+    internal static async ValueTask<ResolvedRegistryCredentials?> ResolveAsync(
+        RegistryCredentials? source,
+        CancellationToken ct
+    )
+    {
+        if (source is null)
+            return null;
+
+        return new ResolvedRegistryCredentials
+        {
+            RegistryUrl = await source.RegistryUrl.ResolveAsync(ct).ConfigureAwait(false),
+            ImagePrefix = await source.ImagePrefix.ResolveAsync(ct).ConfigureAwait(false),
+            Username = await source.Username.ResolveAsync(ct).ConfigureAwait(false),
+            Password = await source.Password.ResolveAsync(ct).ConfigureAwait(false),
+        };
+    }
 }
