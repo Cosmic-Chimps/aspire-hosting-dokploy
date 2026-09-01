@@ -1,3 +1,5 @@
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CosmicChimps.Aspire.Hosting.Dokploy.Models;
@@ -40,9 +42,13 @@ public partial class DokployApiClient
         // Request-side diagnostics. content-length is the load-bearing field: a Dokploy validation
         // error saying a field is "undefined" is ambiguous between "we never sent it" and "we sent it
         // and something in between dropped it", and only the length distinguishes those.
+        // ONE BeforeCall handler, deliberately: Flurl's BeforeCall replaces the previously
+        // registered action rather than chaining, so a second registration silently disables the
+        // first.
         _client.BeforeCall(call =>
         {
             var content = call.HttpRequestMessage.Content;
+
             logger.LogDebug(
                 "→ Dokploy {Method} {Url} content-type={ContentType} content-length={Length}",
                 call.Request.Verb,
@@ -124,6 +130,51 @@ public partial class DokployApiClient
         });
     }
 
+    /// <summary>
+    /// Builds a JSON request body with <c>Content-Type: application/json</c> and <b>no charset
+    /// parameter</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Dokploy (v0.30.3) rejects the charset parameter. Isolated against a live instance with two
+    /// requests identical in host, token, body, and HTTP/2 — differing only in this header:
+    /// </para>
+    /// <code>
+    /// Content-Type: application/json                  → 200, project created
+    /// Content-Type: application/json; charset=UTF-8   → 400
+    ///   {"zodError":{"fieldErrors":{"name":["Invalid input: expected string, received undefined"]}}}
+    /// </code>
+    /// <para>
+    /// Its body parser matches the content type strictly, skips parsing on the parameter, and the
+    /// procedure then runs against an empty object. The body is on the wire in both cases — which
+    /// is what made this present as a lost payload rather than a rejected header, and cost a long
+    /// detour through WAF and redirect theories.
+    /// </para>
+    /// <para>
+    /// Note this worked for a long time with <c>PostJsonAsync</c>: earlier Dokploy versions parsed
+    /// the body regardless. Treat it as a v0.30.x behaviour change, not a long-standing bug.
+    /// </para>
+    /// <para>
+    /// Flurl's <c>PostJsonAsync</c> always appends the charset, and it cannot be removed from a
+    /// <c>BeforeCall</c> hook: the header reads correctly there and the charset is still on the
+    /// socket (confirmed by capturing raw request bytes). Hence explicit content — the only place
+    /// the header survives to the wire.
+    /// </para>
+    /// <para>
+    /// Dropping the parameter is correct independently of Dokploy: JSON is UTF-8 by definition
+    /// (RFC 8259 §8.1) and <c>charset</c> is not a defined parameter for <c>application/json</c>.
+    /// </para>
+    /// </remarks>
+    private static StringContent JsonBody(object body)
+    {
+        var content = new StringContent(
+            JsonSerializer.Serialize(body, JsonSerializerOptions),
+            Encoding.UTF8
+        );
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        return content;
+    }
+
     private static string HeaderOrNone(IFlurlResponse response, string name) =>
         response.Headers.TryGetFirst(name, out var value) ? value : "(none)";
 
@@ -187,7 +238,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST project.create name={Name}", request.Name);
         var response = await _client
             .Request("api", "project.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<CreateProjectResponse>();
 
         return response ?? throw new InvalidOperationException("No response from project.create");
@@ -304,8 +355,9 @@ public partial class DokployApiClient
         );
         await _client
             .Request("api", "environment.create")
-            .PostJsonAsync(
-                new { name = environmentName, projectId },
+            .SendAsync(
+                HttpMethod.Post,
+                JsonBody(new { name = environmentName, projectId }),
                 cancellationToken: ct
             );
 
@@ -373,7 +425,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "application.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<ApplicationResponse>();
 
         return response
@@ -391,7 +443,7 @@ public partial class DokployApiClient
         );
         await _client
             .Request("api", "application.saveDockerProvider")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     public async Task SaveEnvironmentAsync(
@@ -405,7 +457,7 @@ public partial class DokployApiClient
         );
         await _client
             .Request("api", "application.saveEnvironment")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     public async Task DeployApplicationAsync(
@@ -416,7 +468,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST application.deploy applicationId={Id}", request.ApplicationId);
         await _client
             .Request("api", "application.deploy")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     public async Task UpdateApplicationAsync(
@@ -431,7 +483,7 @@ public partial class DokployApiClient
         );
         await _client
             .Request("api", "application.update")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── Redis ───────────────────────────────────────────────────────────────
@@ -461,7 +513,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "redis.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<RedisResponse>();
 
         return response ?? throw new InvalidOperationException("No response from redis.create");
@@ -470,7 +522,7 @@ public partial class DokployApiClient
     public async Task DeployRedisAsync(DeployRedisRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST redis.deploy redisId={Id}", request.RedisId);
-        await _client.Request("api", "redis.deploy").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "redis.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── MariaDB ─────────────────────────────────────────────────────────────
@@ -500,7 +552,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "mariadb.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<MariaDbResponse>();
 
         return response ?? throw new InvalidOperationException("No response from mariadb.create");
@@ -514,7 +566,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST mariadb.deploy mariadbId={Id}", request.MariaDbId);
         await _client
             .Request("api", "mariadb.deploy")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── MongoDB ─────────────────────────────────────────────────────────────
@@ -544,7 +596,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "mongo.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<MongoResponse>();
 
         return response ?? throw new InvalidOperationException("No response from mongo.create");
@@ -553,7 +605,7 @@ public partial class DokployApiClient
     public async Task DeployMongoAsync(DeployMongoRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST mongo.deploy mongoId={Id}", request.MongoId);
-        await _client.Request("api", "mongo.deploy").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "mongo.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── MySQL ───────────────────────────────────────────────────────────────
@@ -583,7 +635,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "mysql.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<MySqlResponse>();
 
         return response ?? throw new InvalidOperationException("No response from mysql.create");
@@ -592,7 +644,7 @@ public partial class DokployApiClient
     public async Task DeployMySqlAsync(DeployMySqlRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST mysql.deploy mysqlId={Id}", request.MySqlId);
-        await _client.Request("api", "mysql.deploy").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "mysql.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── PostgreSQL ───────────────────────────────────────────────────────────
@@ -622,7 +674,7 @@ public partial class DokployApiClient
         );
         var response = await _client
             .Request("api", "postgres.create")
-            .PostJsonAsync(request, cancellationToken: ct)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct)
             .ReceiveJson<PostgresResponse>();
 
         return response ?? throw new InvalidOperationException("No response from postgres.create");
@@ -636,7 +688,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST postgres.deploy postgresId={Id}", request.PostgresId);
         await _client
             .Request("api", "postgres.deploy")
-            .PostJsonAsync(request, cancellationToken: ct);
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── Domains ─────────────────────────────────────────────────────────────
@@ -657,7 +709,7 @@ public partial class DokployApiClient
     public async Task UpdateDomainAsync(UpdateDomainRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST domain.update domainId={Id} host={Host}", request.DomainId, request.Host);
-        await _client.Request("api", "domain.update").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "domain.update").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     public async Task CreateDomainAsync(CreateDomainRequest request, CancellationToken ct = default)
@@ -666,7 +718,7 @@ public partial class DokployApiClient
             "POST domain.create host={Host} applicationId={Id}",
             request.Host, request.ApplicationId
         );
-        await _client.Request("api", "domain.create").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "domain.create").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── Mounts ──────────────────────────────────────────────────────────────
@@ -694,7 +746,7 @@ public partial class DokployApiClient
             "POST mounts.create serviceId={Id} mountPath={Path} type={Type}",
             request.ServiceId, request.MountPath, request.Type
         );
-        await _client.Request("api", "mounts.create").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "mounts.create").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     /// <summary>Updates a mount in place — required so generated file content can change per deploy.</summary>
@@ -704,6 +756,6 @@ public partial class DokployApiClient
             "POST mounts.update mountId={Id} mountPath={Path} type={Type}",
             request.MountId, request.MountPath, request.Type
         );
-        await _client.Request("api", "mounts.update").PostJsonAsync(request, cancellationToken: ct);
+        await _client.Request("api", "mounts.update").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 }

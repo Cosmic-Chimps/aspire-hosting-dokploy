@@ -270,6 +270,34 @@ Ensure networks use `driver: overlay` for multi-host Swarm networking. The examp
 - Use `ports` for services that need external access (e.g., web frontend accessible via Traefik)
 - Use `expose` for internal services that only communicate with other services (e.g., API, databases)
 
+## Request content type
+
+Requests are sent as `Content-Type: application/json`, with **no `charset` parameter**.
+
+This matters. Isolated against a live Dokploy v0.30.3 instance with two requests identical in host,
+token, body and protocol, differing only in this header:
+
+```
+Content-Type: application/json                  → 200, project created
+Content-Type: application/json; charset=UTF-8   → 400
+  {"zodError":{"fieldErrors":{"name":["Invalid input: expected string, received undefined"]}}}
+```
+
+Dokploy's body parser matches the content type strictly, skips parsing on the parameter, and the
+procedure then runs against an empty object. The body is on the wire in both cases, so the failure
+presents as a lost payload rather than a rejected header.
+
+This worked for a long time with `PostJsonAsync` — earlier Dokploy versions parsed the body
+regardless — so treat it as a v0.30.x behaviour change rather than a long-standing bug.
+
+Flurl's `PostJsonAsync` always appends the charset and it **cannot** be stripped in a `BeforeCall`
+hook — the header reads correctly there and the charset is still on the socket. So every POST goes
+through explicit `StringContent` with the header set by hand. Do not "simplify" these back to
+`PostJsonAsync`.
+
+Dropping the parameter is correct regardless of Dokploy: JSON is UTF-8 by definition
+(RFC 8259 §8.1) and `charset` is not a defined parameter for `application/json`.
+
 ## Diagnosing a failed API call
 
 Every failed Dokploy API call logs, at Warning level:
