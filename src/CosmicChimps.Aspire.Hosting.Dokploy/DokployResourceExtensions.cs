@@ -172,12 +172,106 @@ public static class DokployResourceExtensions
         dokployBuilder.Resource.DeployDashboard = true;
 
         var composeEnv = dokployBuilder.Resource.ComposeEnvironmentBuilder;
-        if (configure is not null)
-            composeEnv.WithDashboard(configure);
-        else
-            composeEnv.WithDashboard(enabled: true);
+        composeEnv.WithDashboard(dashboard =>
+        {
+            configure?.Invoke(dashboard);
+
+            // Registered AFTER the caller's configuration so it observes whatever they set.
+            dashboard.AllowTelemetrySenders();
+        });
 
         return dokployBuilder;
+    }
+
+    /// <summary>
+    /// Ensures the dashboard's own service name is present in <c>AllowedHosts</c>, so telemetry
+    /// senders are not rejected by host filtering.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ASP.NET Core host filtering is global to the application and runs <b>before</b>
+    /// authentication, so an <c>AllowedHosts</c> value added to fix the browser's
+    /// <c>400 Bad Request - Invalid Hostname</c> silently governs the OTLP ingest ports too. Senders
+    /// reach the dashboard by its service name; if that is not listed, every one of them is rejected
+    /// with a 400 on both 18889 and 18890 before its API key or payload is read.
+    /// </para>
+    /// <para>
+    /// That failure is invisible from both ends. The dashboard treats it as a routine bad request,
+    /// and the .NET OpenTelemetry SDK reports export failures on an <c>EventSource</c> rather than
+    /// through <c>ILogger</c> — so the only symptom is a dashboard that looks perfectly healthy and
+    /// stays permanently empty. It also makes a <i>wrong</i> API key return 400 instead of 401,
+    /// which reads like a working endpoint with broken senders.
+    /// </para>
+    /// <para>
+    /// Appending is always safe: the value is the host senders genuinely use, so there is no
+    /// deployment in which listing it is wrong and none in which omitting it merely degrades
+    /// something — it disables telemetry outright.
+    /// </para>
+    /// <para>
+    /// <b>Only applied when the caller sets <c>AllowedHosts</c>.</b> Setting it unprompted would turn
+    /// the dashboard's own default into an allow-list of this package's choosing and could refuse a
+    /// hostname the operator relies on. Opting in to filtering stays the caller's decision; keeping
+    /// their telemetry working once they have is this package's job.
+    /// </para>
+    /// </remarks>
+    private static void AllowTelemetrySenders(
+        this IResourceBuilder<DockerComposeAspireDashboardResource> dashboard
+    )
+    {
+        // The resource name IS the compose service name, which is what senders resolve. Read from
+        // the resource rather than rebuilt from the application name, so it cannot drift.
+        var ingestHost = dashboard.Resource.Name;
+
+        dashboard.WithEnvironment(context =>
+        {
+            if (!context.EnvironmentVariables.TryGetValue("AllowedHosts", out var current))
+                return;
+
+            // WithEnvironment(key, string) stores a ReferenceExpression rather than the string, so
+            // matching only on string silently did nothing here — the same invisible failure this
+            // method exists to prevent. Both shapes are handled, and anything else is left alone.
+            context.EnvironmentVariables["AllowedHosts"] = AppendIngestHost(current, ingestHost);
+        });
+    }
+
+
+    /// <summary>
+    /// Returns <paramref name="current"/> with <paramref name="ingestHost"/> appended to the
+    /// semicolon-separated host list, or unchanged if it is already there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Split out from <see cref="AllowTelemetrySenders"/> so it can be tested directly: the
+    /// dashboard resource is not created until publish, so nothing reachable from a built
+    /// application model exercises this.
+    /// </para>
+    /// <para>
+    /// <b>Both shapes must be handled.</b> <c>WithEnvironment(key, string)</c> stores a
+    /// <see cref="ReferenceExpression"/>, not the string — so an implementation that matched only on
+    /// <see cref="string"/> did nothing at all, silently, which is the very failure this is here to
+    /// prevent. Caught by inspecting the generated compose file; it produced no error.
+    /// </para>
+    /// <para>
+    /// De-duplication is best-effort: an expression's placeholders are unresolved at this point, so
+    /// a host supplied through one is invisible here. That is the right way round — a duplicate
+    /// entry is harmless, since host filtering only tests membership, whereas a missing one costs
+    /// every trace, metric and log.
+    /// </para>
+    /// </remarks>
+    internal static object AppendIngestHost(object current, string ingestHost)
+    {
+        return current switch
+        {
+            string list when !AlreadyListed(list) => $"{list};{ingestHost}",
+            ReferenceExpression expression when !AlreadyListed(expression.Format) =>
+                ReferenceExpression.Create($"{expression};{ingestHost}"),
+            _ => current,
+        };
+
+        bool AlreadyListed(string value) =>
+            value
+                .Split(';')
+                .Any(entry => entry.Trim().Equals(ingestHost, StringComparison.OrdinalIgnoreCase));
     }
 
     public static IResourceBuilder<T> WithDokployDomain<T>(

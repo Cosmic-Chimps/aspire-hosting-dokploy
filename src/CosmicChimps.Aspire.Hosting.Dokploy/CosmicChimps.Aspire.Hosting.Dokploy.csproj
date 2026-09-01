@@ -41,7 +41,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!--
+      The repo-root README is the single source: it is the GitHub landing page AND the package
+      readme. A second copy lived here and the two silently drifted for months — the root one was
+      left at 292 lines while everything learned since went into this one.
+    -->
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="icon.png" Pack="true" PackagePath="\" Condition="Exists('icon.png')" />
   </ItemGroup>
 </Project>

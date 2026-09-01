@@ -87,10 +87,6 @@ var dokploy = builder.PublishToDokploy(
 // instead).
 var dashboardDomain = $"dashboard-{environmentName}.example.com";
 
-// The dashboard's own compose service name, "<PublishToDokploy name>-compose-dashboard". This is
-// the hostname every telemetry sender resolves, and it MUST appear in AllowedHosts — see the note
-// on that line. Written as one value so the allow-list entry and the exporter endpoint cannot drift.
-var dashboardHost = "demo-aspire-compose-dashboard";
 var dashboardOtlpKey = builder.AddParameter("dashboard-otlp-key", secret: true);
 var dashboardBrowserToken = builder.AddParameter("dashboard-browser-token", secret: true);
 
@@ -116,17 +112,14 @@ dokploy.WithDokployDashboard(dashboard =>
         // gates the browser AND both OTLP ingest ports. Two distinct failures:
         //
         //   AllowedHosts missing            → 400 "Bad Request - Invalid Hostname" in the browser
-        //   AllowedHosts without the ingest → dashboard looks perfect and stays permanently EMPTY;
-        //   host                              every sender gets 400 before its key or payload is
-        //                                     read, and nothing is logged on either side
+        //   AllowedHosts without the ingest → EVERY sender rejected with 400 before its key or
+        //   host                              payload is read. Nothing is logged on either side, so
+        //                                     the dashboard looks perfect and stays empty forever.
         //
-        // The second is the expensive one. It also makes a wrong key return 400 instead of 401,
-        // which reads like a healthy endpoint with broken senders. To tell them apart, send a
-        // request with a deliberately wrong key: 400 means something answered before auth did.
-        .WithEnvironment(
-            "AllowedHosts",
-            $"{dashboardDomain};localhost;127.0.0.1;{dashboardHost}"
-        )
+        // WithDokployDashboard appends the dashboard's own service name for you, which is why this
+        // list does not mention it — that second failure is handled, not merely documented. Setting
+        // it here as well is harmless (the entry is de-duplicated).
+        .WithEnvironment("AllowedHosts", $"{dashboardDomain};localhost;127.0.0.1")
         // For links the dashboard builds about itself, including the login URL it logs at startup —
         // without it they point at localhost. It does NOT govern the Blazor origin check; forwarded
         // headers above do. Verified both ways against the image.
