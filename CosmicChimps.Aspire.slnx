@@ -8,4 +8,7 @@
   <Folder Name="/src/">
     <Project Path="src/CosmicChimps.Aspire.Hosting.Dokploy/CosmicChimps.Aspire.Hosting.Dokploy.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests.csproj" />
+  </Folder>
 </Solution>

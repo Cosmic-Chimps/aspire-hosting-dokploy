@@ -24,14 +24,18 @@ internal sealed class DokployInfrastructure(
         CancellationToken ct
     )
     {
-        Validate(resource);
-
         // ── 0. Resolve deferred configuration ────────────────────────────────
         // Settings may be Aspire parameters rather than literals (issue #1), and a parameter can
         // only be read asynchronously once deployment is under way. Everything after this line sees
         // plain strings, so no code path downstream can stringify an unresolved parameter into an
         // API request or a log line.
+        //
+        // MUST come before Validate. Validate inspects the resolved string properties, which are
+        // empty until this runs — with the order reversed every deploy fails with
+        // "DokployUrl is not set on resource '<name>'" even when the URL is configured perfectly.
         await resource.ResolveConfigurationAsync(ct);
+
+        Validate(resource);
 
         logger.LogInformation(
             "Starting per-service Dokploy deployment for '{Name}' → {Url}",
@@ -1772,15 +1776,24 @@ internal sealed class DokployInfrastructure(
         return null;
     }
 
-    private void Validate(DokployResource resource)
+    /// <summary>
+    /// Checks the <b>resolved</b> configuration. Call only after
+    /// <see cref="DokployResource.ResolveConfigurationAsync"/> — before it, every property is empty
+    /// by construction and this reports a misconfiguration that does not exist.
+    /// </summary>
+    internal void Validate(DokployResource resource)
     {
         if (string.IsNullOrWhiteSpace(resource.DokployUrl))
             throw new InvalidOperationException(
-                $"DokployUrl is not set on resource '{resource.Name}'"
+                $"DokployUrl is not set on resource '{resource.Name}'. Set DokploySettings.DokployUrl "
+                    + "to a literal value or an Aspire parameter; if it is a parameter, check that "
+                    + "the parameter itself has a value."
             );
         if (string.IsNullOrWhiteSpace(resource.ApiToken))
             throw new InvalidOperationException(
-                $"ApiToken is not set on resource '{resource.Name}'"
+                $"ApiToken is not set on resource '{resource.Name}'. Set DokploySettings.ApiToken "
+                    + "to a literal value or an Aspire parameter; if it is a parameter, check that "
+                    + "the parameter itself has a value."
             );
         if (string.IsNullOrWhiteSpace(resource.ProjectName))
             throw new InvalidOperationException(

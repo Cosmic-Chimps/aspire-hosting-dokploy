@@ -1,0 +1,70 @@
+# ── CI: build and test on every change ────────────────────────────────────────
+#
+# The test suite is a set of regression guards, each written against a bug that actually shipped to
+# NuGet — a validation/resolution ordering fault, a request content type that made Dokploy silently
+# discard every request body, and a redaction gap that would have leaked service secrets into CI
+# logs. All three reached users because nothing ran the tests. That is what this workflow is for.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A superseded PR run tells you nothing; cancel it and keep the queue honest.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.x'
+
+      # The whole solution, not just src/: the example AppHost is the only consumer in this repo,
+      # so building it is what catches an accidental break of the public API.
+      - name: Restore
+        run: dotnet restore CosmicChimps.Aspire.slnx
+
+      - name: Build
+        run: dotnet build CosmicChimps.Aspire.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: |
+          dotnet test tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory ./test-results
+
+      - name: Upload test results
+        if: always() # the results matter most when the run failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ./test-results
+          if-no-files-found: ignore
+
+      # Packing exercises the NuGet metadata and README packaging, which a plain build does not.
+      # Cheaper to fail here than at publish time, when a tag has already been pushed.
+      - name: Verify the package packs
+        run: |
+          dotnet pack src/CosmicChimps.Aspire.Hosting.Dokploy/CosmicChimps.Aspire.Hosting.Dokploy.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=0.0.0-ci \
+            --output ./pack-check

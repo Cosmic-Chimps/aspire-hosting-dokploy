@@ -188,7 +188,7 @@ public partial class DokployApiClient
     /// packed inside a single <c>env</c> string, which is how application environment variables are
     /// sent. Redacting only JSON property names leaks every service secret in the deploy payload.
     /// </remarks>
-    private static string Redact(string body) =>
+    internal static string Redact(string body) =>
         string.IsNullOrEmpty(body)
             ? "(empty)"
             : SecretEnvAssignment()

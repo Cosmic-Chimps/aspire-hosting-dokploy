@@ -41,6 +41,18 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing version: $VERSION"
 
+      # Gate the release on the regression suite.
+      #
+      # Publishing used to pack straight from the tag with nothing run against it, and three
+      # separate defects reached nuget.org that way — each one breaking every deploy for every
+      # consumer until a follow-up preview. A tag should not be able to ship a package the tests
+      # reject.
+      - name: Test
+        run: |
+          dotnet test \
+            tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests/CosmicChimps.Aspire.Hosting.Dokploy.Tests.csproj \
+            --configuration Release
+
       - name: Restore
         run: |
           dotnet restore \
