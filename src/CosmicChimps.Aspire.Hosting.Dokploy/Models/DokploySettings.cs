@@ -97,6 +97,31 @@ public class DokploySettings
     /// </para>
     /// </remarks>
     public bool VerboseHttpLogging { get; set; }
+
+    /// <summary>
+    /// Environment-variable key prefixes the deploy OWNS outright. Existing Dokploy keys under one of
+    /// these prefixes are dropped before merging, so the family is fully replaced on every deploy.
+    /// Default: <c>REVERSEPROXY__</c> (the Aspire YARP route/cluster configuration).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The env merge preserves every key that only exists in Dokploy, so that hand-set values (a Stripe
+    /// key, a cloud function URL) survive redeploys. That contract has one failure mode: a family of
+    /// <b>positional</b> keys. Aspire's YARP integration names routes <c>route0…routeN</c> in
+    /// declaration order and flattens them to <c>REVERSEPROXY__ROUTES__route{n}__…</c>. When a later
+    /// deploy declares FEWER routes, the higher-numbered keys from the earlier deploy are preserved,
+    /// still valid, and still catch-alls — and the gateway fails every request with
+    /// <c>AmbiguousMatchException</c> because two routes now match the same path. Nothing reproduces
+    /// locally, where there is no preserved environment.
+    /// </para>
+    /// <para>
+    /// A family listed here is replaced, not merged: every existing key starting with the prefix is
+    /// removed, then the deploy's keys are written. Add a prefix only for configuration the AppHost
+    /// generates in full; a hand-set key under a listed prefix will not survive. Matching is
+    /// case-insensitive, because .NET configuration keys are.
+    /// </para>
+    /// </remarks>
+    public List<string> ReplacedEnvPrefixes { get; set; } = ["REVERSEPROXY__"];
 }
 
 /// <summary>

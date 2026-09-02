@@ -1166,7 +1166,8 @@ internal sealed class DokployInfrastructure(
         // Save environment variables (with service names already substituted).
         // Strategy: MERGE with existing Dokploy env vars so manually-set values
         // (e.g. Stripe keys, cloud function URLs set outside of Aspire) are preserved.
-        // Aspire-provided keys always win; Dokploy-only keys are kept as-is.
+        // Aspire-provided keys always win; Dokploy-only keys are kept as-is — EXCEPT under the
+        // prefixes the deploy owns outright (ReplacedEnvPrefixes), which are replaced as a family.
         if (!string.IsNullOrWhiteSpace(envString))
         {
             var mergedEnvString = await MergeWithExistingEnvAsync(
@@ -1174,6 +1175,7 @@ internal sealed class DokployInfrastructure(
                 envString,
                 apiClient,
                 svc.Name,
+                resource.ReplacedEnvPrefixes,
                 ct
             );
 
@@ -1687,14 +1689,17 @@ internal sealed class DokployInfrastructure(
 
     /// <summary>
     /// Merges Aspire-generated env vars with the existing env vars already saved in Dokploy.
-    /// Aspire's values win for any key they provide; keys that only exist in Dokploy are preserved.
-    /// This ensures manually-set values (e.g. Stripe keys, cloud function URLs) survive re-deploys.
+    /// Aspire's values win for any key they provide; keys that only exist in Dokploy are preserved —
+    /// except under a prefix in <paramref name="replacedPrefixes"/>, where the whole family is replaced.
+    /// This ensures manually-set values (e.g. Stripe keys, cloud function URLs) survive re-deploys
+    /// without letting positional families (YARP's <c>route{n}</c>) accumulate stale members.
     /// </summary>
     private async Task<string> MergeWithExistingEnvAsync(
         string applicationId,
         string aspireEnvString,
         DokployApiClient apiClient,
         string serviceName,
+        IReadOnlyCollection<string> replacedPrefixes,
         CancellationToken ct
     )
     {
@@ -1716,31 +1721,79 @@ internal sealed class DokployInfrastructure(
         if (string.IsNullOrWhiteSpace(existingEnv))
             return aspireEnvString;
 
+        var result = MergeEnvStrings(existingEnv, aspireEnvString, replacedPrefixes);
+
+        if (result.DroppedStaleKeys.Count > 0)
+        {
+            // Loud on purpose: a dropped key is a change to a running service's configuration that
+            // nobody typed. Keys only — values may be secrets.
+            logger.LogInformation(
+                "Env vars for '{Service}': dropped {Count} stale key(s) under a replaced prefix that this deploy no longer declares: {Keys}",
+                serviceName,
+                result.DroppedStaleKeys.Count,
+                string.Join(", ", result.DroppedStaleKeys)
+            );
+        }
+
+        if (result.PreservedCount > 0)
+        {
+            logger.LogInformation(
+                "Merged env vars for '{Service}': {Aspire} from Aspire + {Preserved} preserved from Dokploy",
+                serviceName,
+                result.AspireCount,
+                result.PreservedCount
+            );
+        }
+
+        return result.Merged;
+    }
+
+    /// <summary>The pure half of the env merge, so the replace-vs-preserve rule can be tested without Dokploy.</summary>
+    internal static EnvMergeResult MergeEnvStrings(
+        string existingEnv,
+        string aspireEnv,
+        IReadOnlyCollection<string> replacedPrefixes
+    )
+    {
         // Parse existing Dokploy env vars into a dict (preserves order, last-wins on duplicates)
         var existing = ParseEnvString(existingEnv);
 
         // Parse Aspire env vars — these override existing values
-        var aspire = ParseEnvString(aspireEnvString);
+        var aspire = ParseEnvString(aspireEnv);
+
+        // A replaced prefix is a family the deploy generates in FULL. Any existing member the deploy
+        // did not write is stale by definition — typically a positional key (route4 from a deploy
+        // that declared five routes) that would otherwise survive forever and collide.
+        var dropped = new List<string>();
+        var prefixes = replacedPrefixes.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
+        if (prefixes.Length > 0)
+        {
+            foreach (var key in existing.Keys.ToList())
+            {
+                var owned = prefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+                if (owned && !aspire.ContainsKey(key))
+                {
+                    existing.Remove(key);
+                    dropped.Add(key);
+                }
+            }
+        }
 
         // Merge: start with existing, overwrite/add Aspire keys
         foreach (var (key, value) in aspire)
             existing[key] = value;
 
         var merged = string.Join('\n', existing.Select(kv => $"{kv.Key}={kv.Value}"));
-
-        var preservedCount = existing.Count - aspire.Count;
-        if (preservedCount > 0)
-        {
-            logger.LogInformation(
-                "Merged env vars for '{Service}': {Aspire} from Aspire + {Preserved} preserved from Dokploy",
-                serviceName,
-                aspire.Count,
-                preservedCount
-            );
-        }
-
-        return merged;
+        return new EnvMergeResult(merged, aspire.Count, existing.Count - aspire.Count, dropped);
     }
+
+    /// <summary>What an env merge did: the text to save, and the counts the log lines report.</summary>
+    internal sealed record EnvMergeResult(
+        string Merged,
+        int AspireCount,
+        int PreservedCount,
+        IReadOnlyList<string> DroppedStaleKeys
+    );
 
     private static Dictionary<string, string> ParseEnvString(string envString)
     {

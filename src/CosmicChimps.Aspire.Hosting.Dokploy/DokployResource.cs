@@ -118,5 +118,8 @@ public class DokployResource : Resource
     /// <c>WithDokployDashboard()</c>.
     /// </summary>
     public bool DeployDashboard { get; set; }
+
+    /// <summary>Env key prefixes replaced wholesale on deploy. See <see cref="Models.DokploySettings.ReplacedEnvPrefixes"/>.</summary>
+    public IReadOnlyList<string> ReplacedEnvPrefixes { get; set; } = ["REVERSEPROXY__"];
 }
 
