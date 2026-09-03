@@ -1047,39 +1047,7 @@ internal sealed class DokployInfrastructure(
     {
         var registry = svc.Registry ?? resource.Registry;
 
-        // Determine the image reference Dokploy will pull.
-        // Aspire's build pipeline already pushed the image before BeforeStartEvent fires, so
-        // .env.Production may already contain a registry-qualified name (e.g. "jjchiw/apiservice:latest").
-        // If it's still a bare local name (e.g. "apiservice:latest"), qualify it using ImagePrefix.
-        var imageToUse = svc.Image;
-        var isLocalImage =
-            !svc.Image.Contains('/')
-            || svc.Image[..svc.Image.IndexOf('/')] is var host
-                && !host.Contains('.')
-                && !host.Contains(':');
-
-        if (isLocalImage && registry?.ImagePrefix is { Length: > 0 } prefix)
-        {
-            var colon = svc.Image.LastIndexOf(':');
-            var name = colon > 0 ? svc.Image[..colon] : svc.Image;
-            var tag = colon > 0 ? svc.Image[(colon + 1)..] : "latest";
-            imageToUse = $"{prefix.TrimEnd('/')}/{name}:{tag}";
-            logger.LogInformation(
-                "Qualified image '{Local}' → '{Qualified}' using registry prefix",
-                svc.Image,
-                imageToUse
-            );
-        }
-        else if (isLocalImage && registry is null)
-        {
-            logger.LogWarning(
-                "Service '{Service}' uses a local image '{Image}'. "
-                    + "Add 'builder.AddContainerRegistry(...)' (Aspire push) and "
-                    + "set DokploySettings.Registry.ImagePrefix (Dokploy pull).",
-                svc.Name,
-                svc.Image
-            );
-        }
+        var imageToUse = ResolveImageReference(svc.Name, svc.Image, registry, logger);
 
         // Check skip-redeploy flag early — we need to fetch current state to compare image tag.
         // If set, and if the service is running with the same image tag, we skip both
@@ -1858,6 +1826,80 @@ internal sealed class DokployInfrastructure(
                     + "Set it via DokploySettings.EnvironmentName or leave unset to use the default 'production'."
             );
     }
+
+    /// <summary>
+    /// The image reference Dokploy will pull for a service — either the compose value as-is when it
+    /// is already registry-qualified, or the local name prefixed with the registry.
+    /// </summary>
+    /// <remarks>
+    /// <para>Extracted so it can be tested. It previously lived inline in
+    /// <c>ConfigureAndDeployApplicationAsync</c> and had never been exercised by a test, which is
+    /// how the empty case below survived: on 2026-09-03 a deploy wrote <c>cosmic-chimps/:latest</c>
+    /// for all four of an app's services and REPORTED SUCCESS. Those services could never pull.</para>
+    ///
+    /// <para>Aspire's build pipeline pushes the image before this runs, so the compose value may
+    /// already be registry-qualified (e.g. <c>ghcr.io/owner/api:tag</c>); a bare local name
+    /// (<c>api:tag</c>) is qualified with <see cref="ResolvedRegistryCredentials.ImagePrefix"/>.</para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The image is empty — the compose YAML still held an unresolved <c>${VAR}</c> placeholder when
+    /// it was read. Qualifying that produces <c>&lt;prefix&gt;/:latest</c>, which is syntactically
+    /// valid, which Dokploy stores without complaint, and which can never pull. A deployment that
+    /// cannot pull must fail at the deploy, not at the next container start.
+    /// </exception>
+    internal static string ResolveImageReference(
+        string serviceName,
+        string image,
+        ResolvedRegistryCredentials? registry,
+        ILogger? logger = null
+    )
+    {
+        if (string.IsNullOrWhiteSpace(image))
+        {
+            throw new InvalidOperationException(
+                $"Service '{serviceName}' has no resolved container image. The compose YAML's image "
+                    + "placeholder was still unresolved when it was read, which normally means the "
+                    + "compose environment's prepare step had not finished — dokploy-deploy must "
+                    + "depend on it (see PublishToDokploy). Refusing to save a Docker provider "
+                    + "configuration that cannot pull."
+            );
+        }
+
+        // "Local" = no registry host in front. A first segment containing '.' or ':' is a host
+        // (ghcr.io, localhost:5000); anything else is an owner/repo path we still need to prefix.
+        var isLocalImage =
+            !image.Contains('/')
+            || image[..image.IndexOf('/')] is var host && !host.Contains('.') && !host.Contains(':');
+
+        if (isLocalImage && registry?.ImagePrefix is { Length: > 0 } prefix)
+        {
+            var colon = image.LastIndexOf(':');
+            var name = colon > 0 ? image[..colon] : image;
+            var tag = colon > 0 ? image[(colon + 1)..] : "latest";
+            var qualified = $"{prefix.TrimEnd('/')}/{name}:{tag}";
+
+            logger?.LogInformation(
+                "Qualified image '{Local}' → '{Qualified}' using registry prefix",
+                image,
+                qualified
+            );
+
+            return qualified;
+        }
+
+        if (isLocalImage && registry is null)
+        {
+            logger?.LogWarning(
+                "Service '{Service}' uses a local image '{Image}'. "
+                    + "Add 'builder.AddContainerRegistry(...)' (Aspire push) and "
+                    + "set DokploySettings.Registry.ImagePrefix (Dokploy pull).",
+                serviceName,
+                image
+            );
+        }
+
+        return image;
+    }
 }
 
 /// <summary>
@@ -1966,4 +2008,5 @@ public class DokployServiceMountAnnotation : IResourceAnnotation
 
     /// <summary>Name Dokploy gives the materialised file (Type = "file").</summary>
     public string? FilePath { get; init; }
+
 }

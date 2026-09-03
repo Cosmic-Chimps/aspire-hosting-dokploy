@@ -99,6 +99,20 @@ public static class DokployResourceExtensions
                 step.DependsOn("publish");
                 step.DependsOn("build");
 
+                // ...and the ${VAR} image placeholders IN that YAML are resolved into .env by the
+                // compose environment's own prepare step. Without this dependency we race it and
+                // DokployComposeParser reads an unresolved image — SubstituteVars yields "", which
+                // ConfigureAndDeployApplicationAsync then qualifies into "<prefix>/:latest" and
+                // saves as the service's Docker provider. Dokploy accepts it and can never pull.
+                //
+                // The race is invisible wherever prepare is fast. Measured on 2026-09-03 against
+                // the same publisher and the same registry settings:
+                //   self-hosted plane  prepare took   0.5 ms  → publisher read resolved values
+                //   Azure plane        prepare took 5 m 29 s  → publisher read "" 2.4s in
+                // The second deploy REPORTED SUCCESS while writing four unpullable image refs into
+                // live Dokploy config, which is why this is a dependency and not a retry.
+                step.DependsOn($"prepare-{name}-compose");
+
                 // Participate in the standard "deploy" aggregate step.
                 step.RequiredBy("deploy");
 
