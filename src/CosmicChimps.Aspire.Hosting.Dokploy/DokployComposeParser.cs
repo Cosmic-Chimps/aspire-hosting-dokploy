@@ -199,28 +199,65 @@ public static partial class DokployComposeParser
     /// Substitutes service names within a value, skipping the places a service name is not a host.
     /// </summary>
     /// <remarks>
-    /// Two shapes are protected:
+    /// Three shapes are protected:
     /// <list type="bullet">
     /// <item>
-    /// connection-string segments whose key never holds a host — <c>Username</c>, <c>Password</c>,
-    /// <c>Database</c> and friends;
+    /// <b>Paths.</b> A value beginning with <c>/</c> is a URL path or a filesystem path. Neither has
+    /// an authority component, so no part of it can be a hostname.
     /// </item>
     /// <item>
-    /// URI credentials — in <c>postgresql://user:pw@host:5432/db</c> only the part after the last
-    /// <c>@</c> is a host, so a username equal to the service name is left alone.
+    /// <b>URIs.</b> Only the authority is a host — not the scheme, not the credentials, and not the
+    /// path. In <c>postgresql://user:pw@host:5432/db</c> that is the part between the last <c>@</c>
+    /// and the path.
+    /// </item>
+    /// <item>
+    /// <b>Connection-string segments</b> whose key never holds a host — <c>Username</c>,
+    /// <c>Password</c>, <c>Database</c> and friends.
     /// </item>
     /// </list>
+    /// <para>
+    /// The path rule is not hypothetical. A gateway routing <c>/api</c> to a service named
+    /// <c>api</c> emits both
+    /// <c>REVERSEPROXY__ROUTES__route0__MATCH__PATH=/api/{**catch-all}</c> and the web client's
+    /// <c>NUXT_PUBLIC_API_BASE_URL=/api</c>. Substituting the word inside those rewrote the public
+    /// path to the Dokploy app name — <c>/api/mcp</c> became <c>/i2t-api-olfgr7/mcp</c>. Because
+    /// both sides were rewritten <em>consistently</em>, the deployment kept working and the defect
+    /// was invisible: the only symptom was that any client using the documented <c>/api</c> path
+    /// received the SPA catch-all's HTML with <b>HTTP 200</b>, which reads as success.
+    /// </para>
+    /// <para>
+    /// A key-name deny-list cannot catch this the way <see cref="NonHostEnvKey"/> catches
+    /// <c>OTEL_SERVICE_NAME</c>: <c>…_BASE_URL</c> and <c>…__MATCH__PATH</c> are legitimately
+    /// URL-shaped, and real hosts arrive under keys just like them. The signal has to come from the
+    /// value.
+    /// </para>
     /// </remarks>
     private static string SubstituteHostsOnly(
         string value,
         List<KeyValuePair<string, string>> ordered
     )
     {
-        // URI form: substitute only the authority that follows the credentials.
-        if (value.Contains("://", StringComparison.Ordinal) && value.Contains('@'))
+        // Path form: no authority, therefore no host, therefore nothing to substitute.
+        if (value.StartsWith('/'))
+            return value;
+
+        // URI form: substitute the authority only, leaving scheme, credentials and path intact.
+        var scheme = value.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0)
         {
-            var at = value.LastIndexOf('@');
-            return value[..(at + 1)] + Replace(value[(at + 1)..]);
+            var start = scheme + 3;
+            // An authority ends at the path, query, fragment — or at a `;`, which cannot occur in
+            // one but does separate segments when a URI is embedded in a connection string.
+            var end = value.IndexOfAny(['/', '?', '#', ';'], start);
+            if (end < 0)
+                end = value.Length;
+
+            var authority = value[start..end];
+            var at = authority.LastIndexOf('@');
+            var credentials = at >= 0 ? authority[..(at + 1)] : "";
+            var host = at >= 0 ? authority[(at + 1)..] : authority;
+
+            return value[..start] + credentials + Replace(host) + value[end..];
         }
 
         // Connection-string form: per `;` segment, keyed by what the segment actually holds.

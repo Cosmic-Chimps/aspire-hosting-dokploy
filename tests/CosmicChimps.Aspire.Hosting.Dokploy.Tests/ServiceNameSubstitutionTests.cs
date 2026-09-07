@@ -140,4 +140,57 @@ public class ServiceNameSubstitutionTests
         Assert.Contains("localhost", result);
         Assert.Contains("127.0.0.1", result);
     }
+
+    /// <summary>
+    /// A URL path is not a hostname, however much of it looks like a service name.
+    /// </summary>
+    /// <remarks>
+    /// A gateway routing <c>/api</c> to a service named <c>api</c> emits the route path and the web
+    /// client's API base URL as env values. Substituting the word inside them rewrote the public
+    /// path to the Dokploy app name, so <c>/api/mcp</c> became <c>/i2t-api-olfgr7/mcp</c>. Both
+    /// sides moved together, so the deployment kept working and nothing looked wrong — the only
+    /// symptom was that a client using the documented <c>/api</c> path fell through to the SPA
+    /// catch-all and received HTML with <b>HTTP 200</b>, which reads as success.
+    /// </remarks>
+    [Fact]
+    public void LeavesUrlPathsAlone()
+    {
+        // The YARP route that carries the public prefix.
+        Assert.Equal(
+            "REVERSEPROXY__ROUTES__route0__MATCH__PATH=/api/{**catch-all}",
+            DokployComposeParser.ApplyServiceNameSubstitution(
+                "REVERSEPROXY__ROUTES__route0__MATCH__PATH=/api/{**catch-all}", Map));
+
+        // The web client's base URL, which has to agree with that route.
+        Assert.Equal("NUXT_PUBLIC_API_BASE_URL=/api",
+            DokployComposeParser.ApplyServiceNameSubstitution("NUXT_PUBLIC_API_BASE_URL=/api", Map));
+
+        // A bare path segment that happens to equal a service name.
+        Assert.Equal("SOME_PATH=/postgres/backups",
+            DokployComposeParser.ApplyServiceNameSubstitution("SOME_PATH=/postgres/backups", Map));
+    }
+
+    /// <summary>
+    /// Within a URI, only the authority is a host — not the path that follows it.
+    /// </summary>
+    [Fact]
+    public void SubstitutesTheAuthorityButNotThePathOfAUri()
+    {
+        Assert.Equal(
+            "GATEWAY__UPSTREAM=http://i2t-api-ab12cd:8080/api/v1",
+            DokployComposeParser.ApplyServiceNameSubstitution(
+                "GATEWAY__UPSTREAM=http://api:8080/api/v1", Map));
+
+        // With credentials as well: scheme, user, and path all left alone.
+        Assert.Equal(
+            "DB__URI=postgresql://postgres:pw@i2t-postgres-u6npej:5432/postgres",
+            DokployComposeParser.ApplyServiceNameSubstitution(
+                "DB__URI=postgresql://postgres:pw@postgres:5432/postgres", Map));
+
+        // A query string is not an authority either.
+        Assert.Equal(
+            "PROBE=http://i2t-api-ab12cd:8080/health?service=api",
+            DokployComposeParser.ApplyServiceNameSubstitution(
+                "PROBE=http://api:8080/health?service=api", Map));
+    }
 }
