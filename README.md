@@ -1,10 +1,10 @@
 # CosmicChimps.Aspire.Hosting.Dokploy
 
-Deploy .NET Aspire applications to Dokploy using Docker Stack format.
+Deploy Aspire applications to Dokploy using Docker Stack format.
 
 ## Overview
 
-This package extends .NET Aspire to deploy applications to [Dokploy](https://dokploy.com), a self-hosted PaaS built on Docker Swarm. It automatically configures your Aspire application for Docker Stack deployment with full control over all Docker Compose service settings.
+This package extends Aspire to deploy applications to [Dokploy](https://dokploy.com), a self-hosted PaaS built on Docker Swarm. It automatically configures your Aspire application for Docker Stack deployment with full control over all Docker Compose service settings.
 
 ## Key Discovery
 
@@ -710,7 +710,7 @@ Contributions welcome! Please open an issue or PR on GitHub.
 ## Links
 
 - [Dokploy Documentation](https://docs.dokploy.com)
-- [.NET Aspire Documentation](https://learn.microsoft.com/dotnet/aspire/)
+- [Aspire Documentation](https://learn.microsoft.com/dotnet/aspire/)
 - [Docker Stack Documentation](https://docs.docker.com/engine/swarm/stack-deploy/)
 - [Docker Compose Specification](https://docs.docker.com/compose/compose-file/)
 
