@@ -478,7 +478,8 @@ to an upstream, so a slow upstream start would kill a perfectly good gateway.
 ## Deploying the Aspire dashboard (opt-in)
 
 By default every service recognised as Aspire infrastructure is stripped from the published output:
-an image containing `aspire-dashboard`, or a service name ending in `-dashboard`. Every environment
+an image containing `aspire-dashboard` (by image only — an application service whose NAME ends in
+`-dashboard`, such as `jobs-dashboard`, is deployed like any other). Every environment
 value that refers to a stripped service is dropped along with it, so `OTEL_EXPORTER_OTLP_ENDPOINT`
 disappears too. That is the right default — a local dashboard has no place in a deployment.
 

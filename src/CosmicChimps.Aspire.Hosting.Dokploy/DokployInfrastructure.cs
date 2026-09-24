@@ -1643,17 +1643,18 @@ internal sealed class DokployInfrastructure(
     /// </summary>
     /// <remarks>
     /// Not consulted at all when <see cref="DokployResource.DeployDashboard"/> is set; see step 5
-    /// of <c>DeployAsync</c>. The recognition is by image name as well as service name, so renaming
-    /// a resource does not smuggle a dashboard past it — the opt-in is the only supported way.
+    /// of <c>DeployAsync</c>. The recognition is by IMAGE only, so renaming a resource does not
+    /// smuggle a dashboard past it — the opt-in is the only supported way.
+    /// <para>
+    /// It used to match a service NAME ending in <c>-dashboard</c> too. That rule added nothing (the
+    /// dashboard's image is <c>…/aspire-dashboard</c> whatever its service is called) and silently
+    /// dropped an application's own service: a job scheduler named <c>bella-jobs-dashboard</c> was
+    /// built, pushed and then never deployed, reported only as one Information line. A name is the
+    /// application's to choose; an image says what the container is.
+    /// </para>
     /// </remarks>
-    private static bool IsAspireInternalService(DokployServiceDescriptor svc)
-    {
-        if (svc.Image?.Contains("aspire-dashboard", StringComparison.OrdinalIgnoreCase) == true)
-            return true;
-        if (svc.Name.EndsWith("-dashboard", StringComparison.OrdinalIgnoreCase))
-            return true;
-        return false;
-    }
+    internal static bool IsAspireInternalService(DokployServiceDescriptor svc) =>
+        svc.Image?.Contains("aspire-dashboard", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     /// Merges Aspire-generated env vars with the existing env vars already saved in Dokploy.

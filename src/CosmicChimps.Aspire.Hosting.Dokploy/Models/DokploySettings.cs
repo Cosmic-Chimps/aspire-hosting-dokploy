@@ -61,7 +61,7 @@ public class DokploySettings
     /// <remarks>
     /// <para>
     /// By default every service recognised as Aspire infrastructure — an image containing
-    /// <c>aspire-dashboard</c>, or a service name ending in <c>-dashboard</c> — is dropped before
+    /// <c>aspire-dashboard</c> (by image only; a service NAME is the application's) — is dropped before
     /// anything is created in Dokploy, and every environment value referring to it is dropped with
     /// it. That is right for a local dashboard, which has no place in a deployment.
     /// </para>
