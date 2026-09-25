@@ -95,9 +95,16 @@ public static class DokployResourceExtensions
                 };
 
                 // Compose YAML is written in the "publish" stage;
-                // container images are built/pushed in the "build" stage.
+                // container images are built in the "build" stage.
                 step.DependsOn("publish");
                 step.DependsOn("build");
+
+                // ...and PUSHED. Every push-{resource} step is required by the "push" meta-step,
+                // not by "build", so waiting on build alone lets the deploy name a tag the registry
+                // does not hold yet. Dokploy accepts it, the pull fails, and the service silently
+                // keeps its previous image. Observed 2026-09-25: dokploy-deploy started 7 s before
+                // push-baxter-api finished; earlier runs only passed because other steps were slower.
+                step.DependsOn(WellKnownPipelineSteps.Push);
 
                 // ...and the ${VAR} image placeholders IN that YAML are resolved into .env by the
                 // compose environment's own prepare step. Without this dependency we race it and

@@ -70,6 +70,19 @@ public class DeployStepDependencyTests
     }
 
     [Fact]
+    public void TheDeployStep_WaitsForEveryImageToBePushed()
+    {
+        // "build" only means the images EXIST locally. Each push-{resource} step is required by the
+        // "push" meta-step, never by "build", so a deploy that waits on build alone tells Dokploy to
+        // pull a tag the registry does not have yet. Observed 2026-09-25: dokploy-deploy started at
+        // 09:07:49 while push-baxter-api ran until 09:07:56; Dokploy accepted the deploy, the pull
+        // found nothing, and the service kept its previous image with no failed task to show for it.
+        var step = BuildDeployStep("bella-baxter");
+
+        Assert.Contains(WellKnownPipelineSteps.Push, step.DependsOnSteps);
+    }
+
+    [Fact]
     public void TheExistingDependenciesAreStillDeclared()
     {
         // prepare is an addition, not a replacement: the images still have to be built and pushed,
