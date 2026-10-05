@@ -33,7 +33,7 @@ public class RequestContentTypeTests
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{server.Port}/") };
         var client = new DokployApiClient(http, NullLogger<DokployApiClient>.Instance);
 
-        await client.CreateProjectAsync(new CreateProjectRequest { Name = "guard-test" });
+        await client.CreateProjectAsync(new CreateProjectRequest { Name = "guard-test" }, TestContext.Current.CancellationToken);
 
         var request = await server.Captured;
         var contentType = HeaderValue(request, "Content-Type");
@@ -52,7 +52,7 @@ public class RequestContentTypeTests
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{server.Port}/") };
         var client = new DokployApiClient(http, NullLogger<DokployApiClient>.Instance);
 
-        await client.CreateProjectAsync(new CreateProjectRequest { Name = "guard-test" });
+        await client.CreateProjectAsync(new CreateProjectRequest { Name = "guard-test" }, TestContext.Current.CancellationToken);
 
         var request = await server.Captured;
 

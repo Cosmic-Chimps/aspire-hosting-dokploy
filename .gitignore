@@ -12,3 +12,4 @@ aspire-output/
 # CI output (ci.yml: test results + pack verification)
 test-results/
 pack-check/
+.serena
