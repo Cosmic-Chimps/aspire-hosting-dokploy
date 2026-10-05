@@ -1,14 +1,32 @@
 # CosmicChimps.Aspire.Hosting.Dokploy
 
-Deploy Aspire applications to Dokploy using Docker Stack format.
+Deploy an Aspire application to a self-hosted [Dokploy](https://dokploy.com) with `aspire deploy`.
 
-## Overview
+## How it works
 
-This package extends Aspire to deploy applications to [Dokploy](https://dokploy.com), a self-hosted PaaS built on Docker Swarm. It automatically configures your Aspire application for Docker Stack deployment with full control over all Docker Compose service settings.
+Every Aspire resource becomes its own Dokploy service, created and updated through Dokploy's REST
+API:
 
-## Key Discovery
+| Aspire resource | Becomes in Dokploy |
+|---|---|
+| Project or container | An **application** (Docker provider) pulling the image Aspire pushed |
+| `postgres`, `redis`, `mysql`, `mariadb` or `mongo` image | A **managed database**; see [Native databases](#native-databases) |
+| The Aspire dashboard | Nothing, unless you [opt in](#deploying-the-aspire-dashboard-opt-in) |
 
-**Aspire.Hosting.Docker already includes full Docker Stack/Swarm support!** This package builds on that foundation to provide seamless Dokploy integration via API. You use the built-in `PublishAsDockerComposeService()` method to configure all Swarm settings with complete flexibility.
+`aspire deploy` builds and pushes your images and generates a compose file. This package reads that
+file and brings Dokploy in line with it:
+
+1. finds or creates the project and environment,
+2. creates or updates each service,
+3. sets its image, environment variables, domains and mounts,
+4. triggers the deploy and [waits for it to finish](#waiting-for-deploys-to-finish).
+
+Re-running is idempotent: services are matched by name, so a second deploy updates them in place
+rather than creating duplicates.
+
+**Dokploy is treated as shared with the people who use its UI.** Environment variables set there by
+hand (a Stripe key, say) survive every redeploy, except under prefixes the AppHost owns outright
+(`ReplacedEnvPrefixes`, by default the YARP `REVERSEPROXY__` family). No service is ever deleted.
 
 ## Installation
 
@@ -16,245 +34,104 @@ This package extends Aspire to deploy applications to [Dokploy](https://dokploy.
 dotnet add package CosmicChimps.Aspire.Hosting.Dokploy
 ```
 
-## Usage
-
-### Basic Configuration with Swarm Deploy Settings
+## Quick start
 
 ```csharp
-using Aspire.Hosting.Docker.Resources.ServiceNodes.Swarm;
+using CosmicChimps.Aspire.Hosting.Dokploy;
+using CosmicChimps.Aspire.Hosting.Dokploy.Models;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Configure Docker Compose environment for Stack/Swarm format
-builder.AddDockerComposeEnvironment("env")
-    .ConfigureComposeFile(composeFile =>
+var dokployUrl   = builder.AddParameter("dokploy-url");
+var dokployToken = builder.AddParameter("dokploy-token", secret: true);
+var registryUser = builder.AddParameter("registry-username");
+var registryPw   = builder.AddParameter("registry-password", secret: true);
+
+// Aspire builds and pushes the images here. The push uses your ambient `docker login`.
+#pragma warning disable ASPIRECOMPUTE003
+builder.AddContainerRegistry("registry", endpoint: "ghcr.io", repository: "myorg");
+#pragma warning restore ASPIRECOMPUTE003
+
+var dokploy = builder.PublishToDokploy("myapp", s =>
+{
+    s.DokployUrl      = dokployUrl.AsDokployValue();
+    s.ApiToken        = dokployToken.AsDokployValue();
+    s.EnvironmentName = "production";   // created if missing; this is the default
+
+    // How Dokploy pulls the images. ImagePrefix must match the registry's repository above.
+    s.Registry = new RegistryCredentials
     {
-        // Set version for Docker Stack compatibility
-        composeFile.Version = "3.8";
+        RegistryUrl = "ghcr.io",
+        ImagePrefix = "ghcr.io/myorg",
+        Username    = registryUser.AsDokployValue(),
+        Password    = registryPw.AsDokployValue(),
+    };
+});
 
-        // Change networks from bridge to overlay for Swarm
-        foreach (var network in composeFile.Networks.Values)
-        {
-            if (network.Driver == "bridge" || network.Driver is null)
-            {
-                network.Driver = "overlay";
-            }
-        }
+var db = builder.AddPostgres("postgres").AddDatabase("appdb");   // → Dokploy-managed Postgres
 
-        // Clean up all services for Stack compatibility
-        foreach (var service in composeFile.Services.Values)
-        {
-            // Remove depends_on (not supported in Stack format)
-            service.DependsOn.Clear();
-
-            // Remove restart if deploy section exists
-            if (service.Deploy is not null)
-            {
-                service.Restart = null;
-            }
-        }
-    });
-
-// Configure Redis with Swarm deploy settings
-var cache = builder.AddRedis("cache")
-    .PublishAsDockerComposeService((_, service) =>
-    {
-        service.Deploy = new Deploy
-        {
-            Replicas = 1,
-            RestartPolicy = new RestartPolicy
-            {
-                Condition = "on-failure",
-                Delay = "5s",
-                MaxAttempts = 3
-            },
-            Placement = new Placement
-            {
-                // Pin to manager node for data persistence
-                Constraints = new List<string> { "node.role == manager" }
-            }
-        };
-        // Remove compose-specific restart
-        service.Restart = null;
-    });
-
-// Configure API service with Swarm deploy settings
-var api = builder.AddProject<Projects.ApiService>("api")
-    .PublishAsDockerComposeService((_, service) =>
-    {
-        service.Deploy = new Deploy
-        {
-            Replicas = 2, // Scale to 2 instances
-            RestartPolicy = new RestartPolicy
-            {
-                Condition = "on-failure",
-                Delay = "5s",
-                MaxAttempts = 3
-            }
-        };
-        service.Restart = null;
-    });
-
-// Configure web with Traefik labels for sticky sessions
-builder.AddProject<Projects.Web>("web")
-    .WithReference(cache)
-    .WithReference(api)
-    .PublishAsDockerComposeService((_, service) =>
-    {
-        service.Deploy = new Deploy
-        {
-            Replicas = 3,
-            RestartPolicy = new RestartPolicy
-            {
-                Condition = "on-failure",
-                Delay = "5s",
-                MaxAttempts = 3
-            },
-            Labels = new LabelSpecs
-            {
-                { "traefik.http.services.blazor.loadbalancer.sticky.cookie", "true" },
-                { "traefik.http.services.blazor.loadbalancer.sticky.cookie.name", "blazor_affinity" }
-            }
-        };
-        service.Restart = null;
-    });
+builder.AddProject<Projects.Api>("api")
+       .WithReference(db)
+       .WaitFor(db)
+       .WithDokployDomain(dokploy, "api.example.com", port: 8080); // HTTPS + Let's Encrypt
 
 builder.Build().Run();
 ```
 
-## Why Use PublishAsDockerComposeService Directly?
+Then run `aspire deploy`. Parameters left unset are prompted for. The Dokploy API token is generated
+at **Settings → Profile → API/CLI**. Every setting accepts a literal or an Aspire parameter; see
+[Configuring with Aspire parameters](#configuring-with-aspire-parameters).
 
-By using `PublishAsDockerComposeService()` directly instead of wrapper methods, you get:
+`example/CosmicChimps.Aspire.AppHost/` is a complete, CI-built version of this, including the
+deployed dashboard.
 
-✅ **Full Control**: Configure any Docker Compose/Stack setting  
-✅ **Flexibility**: Add labels, volumes, networks, environment variables, etc.  
-✅ **Composability**: Chain multiple configurations together  
-✅ **No Limitations**: Not restricted to predefined wrapper methods  
+## Per-service settings
 
-### Example: Complete Service Configuration
+Called on any resource, passing the builder returned by `PublishToDokploy`:
 
-```csharp
-builder.AddProject<Projects.Web>("web")
-    .PublishAsDockerComposeService((_, service) =>
-    {
-        // Deploy settings
-        service.Deploy = new Deploy
-        {
-            Replicas = 3,
-            RestartPolicy = new RestartPolicy
-            {
-                Condition = "on-failure",
-                Delay = "10s",
-                MaxAttempts = 5
-            },
-            Placement = new Placement
-            {
-                Constraints = new List<string> 
-                { 
-                    "node.role == worker",
-                    "node.labels.region == us-east"
-                }
-            },
-            // Add Traefik labels
-            Labels = new LabelSpecs
-            {
-                { "traefik.enable", "true" },
-                { "traefik.http.routers.web.rule", "Host(`example.com`)" },
-                { "traefik.http.services.web.loadbalancer.sticky.cookie", "true" }
-            },
-            // Resource limits
-            Resources = new Resources
-            {
-                Limits = new ResourceLimits
-                {
-                    Cpus = "0.5",
-                    Memory = "512M"
-                },
-                Reservations = new ResourceReservations
-                {
-                    Cpus = "0.25",
-                    Memory = "256M"
-                }
-            }
-        };
-        
-        // Remove compose-specific settings
-        service.Restart = null;
-        
-        // Add volumes, networks, or other settings as needed
-    });
-```
+| Method | Effect in Dokploy |
+|---|---|
+| `WithDokployDomain(dokploy, host, https, certificateType, port)` | Domain on the application, created or updated. **Pass `port`**: without it Dokploy routes to 3000, while .NET images listen on 8080 |
+| `WithDokployMount(dokploy, containerPath, volumeName)` | Named volume that survives redeploys; see [Volumes](#volumes) |
+| `WithDokployBindMount(dokploy, hostPath, containerPath)` | Bind mount from the Docker host |
+| `WithDokployHealthCheck(dokploy, cmd, interval, timeout, startPeriod, retries)` | Swarm health check |
+| `WithDokployStopGracePeriod(dokploy, duration)` | Swarm stop grace period |
+| `WithDokployUpdateOrder(dokploy, "stop-first" \| "start-first")` | Swarm rolling-update order |
+| `WithDokploySkipRedeploy(dokploy)` | Skip the redeploy when the running image is unchanged (by tag, then digest) |
+| `WithDokployStatefulService(dokploy)` | Skip-redeploy + `stop-first` + a stop grace period, for single-replica stateful apps |
+| `WithDokployNoSubstitution(dokploy, keys...)` | Keep these env values verbatim, never rewriting service names in them |
+| `WithDokployExclude(dokploy)` | Leave the service out of the deploy (references to it still resolve) |
 
-## Docker Stack vs Docker Compose
+These apply to **applications only**. On a [native database](#native-databases) they have no
+effect, and the deploy logs a warning saying so.
 
-### ports vs expose
+**Compose `deploy:` settings are not forwarded.** Replicas, placement, resource limits, Swarm labels
+and restart policy set through `PublishAsDockerComposeService` are ignored, because Dokploy services
+are created through its API rather than from the compose file. Set them in the Dokploy UI for now.
 
-- **`ports`**: Exposes ports to the host machine (external access)
-  ```yaml
-  ports:
-    - "${WEBFRONTEND_PORT}:8080"
-  ```
-  Use when you need external access (e.g., web frontend via reverse proxy)
+## Native databases
 
-- **`expose`**: Makes ports available only to other services in the same network (internal access)
-  ```yaml
-  expose:
-    - "${APISERVICE_PORT}"
-  ```
-  Use for internal services that only need to communicate with other services
+A service whose image is `postgres`, `redis`, `mysql`, `mariadb` or `mongo` (the last path segment,
+so `docker.io/library/postgres:17` counts) becomes a **Dokploy-managed database**, not an
+application:
 
-### Stack Format Requirements
+- **Credentials** come from the service's own environment (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, …),
+  which Aspire fills from its generated password parameter. The connection strings Aspire gives
+  consumers therefore match. Database name and user come from `POSTGRES_DB` / `POSTGRES_USER` and
+  their equivalents.
+- **Consumers** reach it by its Dokploy app name. References are rewritten for you: `Host=postgres`
+  in a connection string becomes `Host=<the database's app name>`.
+- **Storage** is Dokploy's own: every managed database gets a persistent `<appName>-data` volume
+  when it is created. You need no `WithDokployMount`.
+- **Created once, then only redeployed.** An existing database is never recreated, so a password
+  changed in the AppHost after the first deploy is **not** applied to it.
+- **Failures surface directly.** Dokploy's database deploy runs inside the API call, so an error
+  fails the step on the spot. That call is allowed `DeploymentTimeout` (10 minutes by default),
+  since a first deploy pulls the image.
 
-Docker Stack has different requirements than Docker Compose:
-
-#### ✅ Supported
-
-- Pre-built images in a registry
-- Environment variables
-- Named volumes
-- Overlay networks
-- Deploy sections (replicas, restart policy, placement, resources, labels)
-- `expose` and `ports` for networking
-
-#### ❌ Not Supported
-
-- `build:` sections (images must be pre-built)
-- `depends_on:` (Swarm has built-in service discovery)
-- `container_name:` (Swarm manages naming)
-- Top-level `restart:` (use `deploy.restart_policy`)
-- Extended `depends_on` format with conditions
-
-## Configuration
-
-Store your Dokploy credentials in `appsettings.json`:
-
-```json
-{
-  "Dokploy": {
-    "ApiToken": "your-api-token",
-    "ProjectId": "your-project-id"
-  }
-}
-```
-
-## Troubleshooting
-
-### Error: "services.webfrontend.depends_on.0 must be a string"
-
-Docker Stack doesn't support the extended `depends_on` format with conditions. Use the `ConfigureComposeFile` method shown above to remove `depends_on` entries, or convert them to simple string format.
-
-### Error: "Service has a build section"
-
-Stack files don't support `build:`. Ensure your project images are pre-built and pushed to a registry accessible by your Swarm cluster.
-
-### Networks not working between services
-
-Ensure networks use `driver: overlay` for multi-host Swarm networking. The example above shows how to convert bridge networks to overlay in the `ConfigureComposeFile` method.
-
-### When to use `ports` vs `expose`
-
-- Use `ports` for services that need external access (e.g., web frontend accessible via Traefik)
-- Use `expose` for internal services that only communicate with other services (e.g., API, databases)
+The `WithDokploy*` settings above don't apply here. To run a database as an ordinary application
+instead (for your own mounts or health checks), use an image whose name isn't on the list, such as
+`pgvector/pgvector`.
 
 ## Request content type
 
@@ -406,17 +283,25 @@ a secret cannot leak into a log line even by accident.
 
 ## Volumes
 
-Use `WithDokployMount` for anything that must survive a redeploy:
+Use `WithDokployMount` for anything in an **application** that must survive a redeploy:
 
 ```csharp
-builder.AddPostgres("postgres")
-       .WithDokployMount(dokploy, "/var/lib/postgresql/data", "myapp-postgres-data");
+builder.AddSeq("seq")
+       .WithDokployMount(dokploy, "/data", "myapp-seq-data");
 ```
 
 **`WithDataVolume()` is not enough.** Dokploy application services run on Docker Swarm, which does
 not honour it — the container comes up healthy on empty storage and the deploy reports success. A
-database that starts on an empty volume is a data-loss event, not a first run, so register the
-volume through Dokploy's own mounts API with `WithDokployMount`.
+service that starts on an empty volume is a data-loss event, not a first run, so register the volume
+through Dokploy's own mounts API with `WithDokployMount`.
+
+Mounts are created **before** the deploy is triggered, so a new volume is in place for the deploy
+that introduces it.
+
+**Not for native databases.** `AddPostgres`, `AddRedis` and the others become Dokploy-managed
+databases, which already get a persistent volume; a `WithDokployMount` on them has no effect and
+logs a warning. See [Native databases](#native-databases). To mount into a database you run as an
+application, use an image outside the native list.
 
 ### Mount a path that exists in the image
 
@@ -721,8 +606,8 @@ and [dashboard configuration](https://aspire.dev/dashboard/configuration/).
 
 ## Examples
 
-See `example/CosmicChimps.Aspire.AppHost/` for a complete working example: Redis, an API service and
-a Blazor web frontend configured for Docker Stack deployment, plus
+See `example/CosmicChimps.Aspire.AppHost/` for a complete working example: a Dokploy-managed Redis,
+an API service, Seq and a Blazor web frontend with a domain, plus
 
 - **Aspire parameters** for every deployment setting ([#1](https://github.com/Cosmic-Chimps/aspire-hosting-dokploy/issues/1)) — the Dokploy URL and token, and the registry credentials;
 - **the Aspire dashboard deployed**, with ingest and browser authentication, the two reverse-proxy settings, and the ingest header on each sender.
@@ -732,7 +617,7 @@ that drifts.
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ## Contributing
 
@@ -741,8 +626,7 @@ Contributions welcome! Please open an issue or PR on GitHub.
 ## Links
 
 - [Dokploy Documentation](https://docs.dokploy.com)
-- [Aspire Documentation](https://learn.microsoft.com/dotnet/aspire/)
-- [Docker Stack Documentation](https://docs.docker.com/engine/swarm/stack-deploy/)
-- [Docker Compose Specification](https://docs.docker.com/compose/compose-file/)
+- [Dokploy API reference](https://docs.dokploy.com/docs/api)
+- [Aspire Documentation](https://aspire.dev)
 
 

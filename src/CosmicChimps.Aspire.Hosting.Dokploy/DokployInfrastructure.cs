@@ -166,6 +166,9 @@ internal sealed class DokployInfrastructure(
             string.Join(", ", servicesToDeploy.Select(s => s.Name))
         );
 
+        foreach (var warning in FindSettingsIgnoredOnNativeServices(resource, servicesToDeploy))
+            logger.LogWarning("{Warning}", warning);
+
         // ── 6. Build in-memory state store (always populated from live Dokploy below) ─
         var stateStore = new DokployStateStore(logger);
 
@@ -1052,7 +1055,7 @@ internal sealed class DokployInfrastructure(
     /// The triggered deploy to wait for, or <c>null</c> when the deploy was skipped
     /// (<c>WithDokploySkipRedeploy</c>) or waiting is off.
     /// </returns>
-    private async Task<PendingDeployment?> ConfigureAndDeployApplicationAsync(
+    internal async Task<PendingDeployment?> ConfigureAndDeployApplicationAsync(
         DokployServiceDescriptor svc,
         string applicationId,
         string? envString,
@@ -1066,7 +1069,6 @@ internal sealed class DokployInfrastructure(
         CancellationToken ct
     )
     {
-        PendingDeployment? pending = null;
         var registry = svc.Registry ?? resource.Registry;
 
         var imageToUse = ResolveImageReference(svc.Name, svc.Image, registry, logger);
@@ -1090,7 +1092,8 @@ internal sealed class DokployInfrastructure(
                     "Skipping redeploy for '{Service}' — already running with image {Image} (WithDokploySkipRedeploy)",
                     svc.Name, imageToUse
                 );
-                goto afterDockerSave;
+                await ApplyMountsAsync(svc, applicationId, resource, apiClient, deployFollows: false, ct);
+                return null;
             }
 
             if (isRunning && !sameTag)
@@ -1115,7 +1118,8 @@ internal sealed class DokployInfrastructure(
                         "Skipping redeploy for '{Service}' — digest unchanged ({Digest}) despite new tag (WithDokploySkipRedeploy)",
                         svc.Name, currentDigest
                     );
-                    goto afterDockerSave;
+                    await ApplyMountsAsync(svc, applicationId, resource, apiClient, deployFollows: false, ct);
+                    return null;
                 }
 
                 logger.LogInformation(
@@ -1297,6 +1301,11 @@ internal sealed class DokployInfrastructure(
             }
         }
 
+        // Mounts BEFORE the deploy: Dokploy's queue worker reads them from its database when it runs
+        // the job, which can be before the next API call lands. Created afterwards, a new volume or a
+        // changed file mount only took effect on the FOLLOWING deploy.
+        await ApplyMountsAsync(svc, applicationId, resource, apiClient, deployFollows: true, ct);
+
         // Deploy the application (trigger Swarm rolling update). This only queues it in Dokploy;
         // the unique title is what lets WaitForDeploymentsAsync find the resulting deployment row.
         var deployTitle = $"Aspire deploy of {svc.Name} ({deployRunId})";
@@ -1315,109 +1324,134 @@ internal sealed class DokployInfrastructure(
             ct
         );
 
-        if (resource.WaitForDeployments)
-            pending = new PendingDeployment(svc.Name, applicationId, deployTitle, priorDeploymentIds);
+        return resource.WaitForDeployments
+            ? new PendingDeployment(svc.Name, applicationId, deployTitle, priorDeploymentIds)
+            : null;
+    }
 
-        afterDockerSave:
-
-        // Configure persistent volume mounts (idempotent — skips if already exists).
+    /// <summary>
+    /// Creates or updates the service's mounts (idempotent — an unchanged mount is skipped).
+    /// </summary>
+    /// <param name="deployFollows">
+    /// <c>false</c> on the skip-redeploy path, where a changed mount will not reach the running
+    /// container until something redeploys it — worth a warning rather than silence.
+    /// </param>
+    internal async Task ApplyMountsAsync(
+        DokployServiceDescriptor svc,
+        string applicationId,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        bool deployFollows,
+        CancellationToken ct
+    )
+    {
         var mountAnnotations = resource
             .Annotations.OfType<DokployServiceMountAnnotation>()
             .Where(a => string.Equals(a.ServiceName, svc.Name, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (mountAnnotations.Count > 0)
+        if (mountAnnotations.Count == 0)
+            return;
+
+        var existingMounts = await apiClient.GetMountsByApplicationIdAsync(applicationId, ct);
+        // Dedup by MountPath (container path) — each container path is unique per service.
+        // The DB stores the actual hostPath Dokploy assigned, so MountPath-based dedup
+        // reliably prevents creating the same bind mount twice on re-deploy.
+        var existingByPath = existingMounts
+            .Where(m => m.MountPath is not null)
+            .GroupBy(m => m.MountPath!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+        var changed = 0;
+        foreach (var mountAnnotation in mountAnnotations)
         {
-            var existingMounts = await apiClient.GetMountsByApplicationIdAsync(applicationId, ct);
-            // Dedup by MountPath (container path) — each container path is unique per service.
-            // The DB stores the actual hostPath Dokploy assigned, so MountPath-based dedup
-            // reliably prevents creating the same bind mount twice on re-deploy.
-            var existingByPath = existingMounts
-                .Where(m => m.MountPath is not null)
-                .GroupBy(m => m.MountPath!, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            var isFileMount = string.Equals(
+                mountAnnotation.Type, "file", StringComparison.OrdinalIgnoreCase);
 
-            foreach (var mountAnnotation in mountAnnotations)
+            // A FILE mount carries content that can change between deploys, so "already exists"
+            // is not the same as "already correct" — skipping it would leave the container running
+            // stale config with nothing logged anywhere.
+            if (isFileMount
+                && existingByPath.TryGetValue(mountAnnotation.ContainerPath, out var existingFile)
+                && !string.Equals(existingFile.Content, mountAnnotation.Content, StringComparison.Ordinal))
             {
-                var isFileMount = string.Equals(
-                    mountAnnotation.Type, "file", StringComparison.OrdinalIgnoreCase);
-
-                // A FILE mount carries content that can change between deploys, so "already exists"
-                // is not the same as "already correct" — skipping it would leave the container running
-                // stale config with nothing logged anywhere.
-                if (isFileMount
-                    && existingByPath.TryGetValue(mountAnnotation.ContainerPath, out var existingFile)
-                    && !string.Equals(existingFile.Content, mountAnnotation.Content, StringComparison.Ordinal))
+                if (string.IsNullOrEmpty(existingFile.MountId))
                 {
-                    if (string.IsNullOrEmpty(existingFile.MountId))
-                    {
-                        // Delete-then-recreate could leave the service with NO config if the second
-                        // half fails, so refuse loudly instead of risking that.
-                        throw new InvalidOperationException(
-                            $"File mount '{mountAnnotation.ContainerPath}' on '{svc.Name}' changed but "
-                                + "Dokploy returned no mountId, so it cannot be updated in place. Remove "
-                                + "the mount in the Dokploy UI and re-deploy."
-                        );
-                    }
-
-                    logger.LogInformation(
-                        "Updating file mount '{Path}' on '{Service}' — content changed",
-                        mountAnnotation.ContainerPath, svc.Name
+                    // Delete-then-recreate could leave the service with NO config if the second
+                    // half fails, so refuse loudly instead of risking that.
+                    throw new InvalidOperationException(
+                        $"File mount '{mountAnnotation.ContainerPath}' on '{svc.Name}' changed but "
+                            + "Dokploy returned no mountId, so it cannot be updated in place. Remove "
+                            + "the mount in the Dokploy UI and re-deploy."
                     );
-
-                    await apiClient.UpdateMountAsync(
-                        new UpdateMountRequest
-                        {
-                            MountId = existingFile.MountId!,
-                            Type = mountAnnotation.Type,
-                            MountPath = mountAnnotation.ContainerPath,
-                            ServiceType = "application",
-                            Content = mountAnnotation.Content,
-                            FilePath = mountAnnotation.FilePath
-                                ?? Path.GetFileName(mountAnnotation.ContainerPath),
-                        },
-                        ct
-                    );
-                    continue;
-                }
-
-                if (existingByPath.ContainsKey(mountAnnotation.ContainerPath))
-                {
-                    logger.LogInformation(
-                        "Mount '{Path}' on '{Service}' already exists — skipping",
-                        mountAnnotation.ContainerPath,
-                        svc.Name
-                    );
-                    continue;
                 }
 
                 logger.LogInformation(
-                    "Creating volume mount '{Volume}' → '{Path}' on '{Service}'",
-                    mountAnnotation.VolumeName,
-                    mountAnnotation.ContainerPath,
-                    svc.Name
+                    "Updating file mount '{Path}' on '{Service}' — content changed",
+                    mountAnnotation.ContainerPath, svc.Name
                 );
 
-                await apiClient.CreateMountAsync(
-                    new CreateMountRequest
+                await apiClient.UpdateMountAsync(
+                    new UpdateMountRequest
                     {
+                        MountId = existingFile.MountId!,
                         Type = mountAnnotation.Type,
                         MountPath = mountAnnotation.ContainerPath,
-                        ServiceId = applicationId,
                         ServiceType = "application",
-                        VolumeName = mountAnnotation.VolumeName,
-                        HostPath = mountAnnotation.HostPath,
                         Content = mountAnnotation.Content,
-                        FilePath = isFileMount
-                            ? mountAnnotation.FilePath ?? Path.GetFileName(mountAnnotation.ContainerPath)
-                            : null,
+                        FilePath = mountAnnotation.FilePath
+                            ?? Path.GetFileName(mountAnnotation.ContainerPath),
                     },
                     ct
                 );
+                changed++;
+                continue;
             }
+
+            if (existingByPath.ContainsKey(mountAnnotation.ContainerPath))
+            {
+                logger.LogInformation(
+                    "Mount '{Path}' on '{Service}' already exists — skipping",
+                    mountAnnotation.ContainerPath,
+                    svc.Name
+                );
+                continue;
+            }
+
+            logger.LogInformation(
+                "Creating volume mount '{Volume}' → '{Path}' on '{Service}'",
+                mountAnnotation.VolumeName,
+                mountAnnotation.ContainerPath,
+                svc.Name
+            );
+
+            await apiClient.CreateMountAsync(
+                new CreateMountRequest
+                {
+                    Type = mountAnnotation.Type,
+                    MountPath = mountAnnotation.ContainerPath,
+                    ServiceId = applicationId,
+                    ServiceType = "application",
+                    VolumeName = mountAnnotation.VolumeName,
+                    HostPath = mountAnnotation.HostPath,
+                    Content = mountAnnotation.Content,
+                    FilePath = isFileMount
+                        ? mountAnnotation.FilePath ?? Path.GetFileName(mountAnnotation.ContainerPath)
+                        : null,
+                },
+                ct
+            );
+            changed++;
         }
 
-        return pending;
+        if (changed > 0 && !deployFollows)
+            logger.LogWarning(
+                "{Count} mount(s) on '{Service}' changed, but its redeploy was skipped "
+                    + "(WithDokploySkipRedeploy) — the running container keeps its old mounts until "
+                    + "the next deploy. Redeploy it from the Dokploy UI to apply them now.",
+                changed,
+                svc.Name
+            );
     }
 
     /// <summary>
@@ -1541,12 +1575,65 @@ internal sealed class DokployInfrastructure(
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// One warning per native database that carries <c>WithDokploy*</c> settings — which only
+    /// apply to Dokploy applications and were otherwise dropped without a word.
+    /// </summary>
+    /// <remarks>
+    /// The case that prompted it: <c>AddPostgres(...).WithDokployMount(...)</c>, once the README's own
+    /// volume example. The postgres image makes it a Dokploy-managed database, whose deploy path never
+    /// reads mounts, so the mount silently did nothing. (Data was still kept: Dokploy gives every
+    /// managed database its own <c>&lt;appName&gt;-data</c> volume.)
+    /// </remarks>
+    internal static IReadOnlyList<string> FindSettingsIgnoredOnNativeServices(
+        DokployResource resource,
+        IEnumerable<DokployServiceDescriptor> services
+    )
+    {
+        var warnings = new List<string>();
+        foreach (var svc in services.Where(s => s.IsNativeService))
+        {
+            bool For(string serviceName) =>
+                string.Equals(serviceName, svc.Name, StringComparison.OrdinalIgnoreCase);
+
+            var ignored = resource.Annotations
+                .Select(a => a switch
+                {
+                    DokployServiceMountAnnotation m when For(m.ServiceName) =>
+                        m.Type == "bind" ? "WithDokployBindMount" : "WithDokployMount",
+                    DokployServiceDomainAnnotation d when For(d.ServiceName) => "WithDokployDomain",
+                    DokployServiceHealthCheckAnnotation h when For(h.ServiceName) => "WithDokployHealthCheck",
+                    DokployServiceStopGracePeriodAnnotation s when For(s.ServiceName) => "WithDokployStopGracePeriod",
+                    DokployServiceUpdateOrderAnnotation u when For(u.ServiceName) => "WithDokployUpdateOrder",
+                    DokployServiceSkipRedeployAnnotation r when For(r.ServiceName) => "WithDokploySkipRedeploy",
+                    DokployServiceNoSubstitutionAnnotation n when For(n.ServiceName) => "WithDokployNoSubstitution",
+                    _ => null,
+                })
+                .OfType<string>()
+                .Distinct()
+                .ToList();
+
+            if (ignored.Count > 0)
+                warnings.Add(
+                    $"'{svc.Name}' is deployed as a Dokploy-managed {svc.NativeServiceType} database, so "
+                        + $"{string.Join(", ", ignored)} on it has no effect — those settings apply to "
+                        + "Dokploy applications only. Dokploy gives the database its own persistent "
+                        + "'<appName>-data' volume; manage anything else in the Dokploy UI."
+                );
+        }
+        return warnings;
+    }
+
     private DokployApiClient BuildApiClient(DokployResource resource)
     {
         using var scope = serviceProvider.CreateScope();
         var factory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
         var http = factory.CreateClient();
         http.BaseAddress = new Uri(resource.DokployUrl);
+        // HttpClient's own 100 s default caps EVERY request, so a longer per-call timeout could never
+        // take effect. Flurl enforces its own per-request timeout (also 100 s by default), so ordinary
+        // calls are unchanged; only the native database deploys extend it (NativeDeployTimeout).
+        http.Timeout = Timeout.InfiniteTimeSpan;
         http.DefaultRequestHeaders.Add("x-api-key", resource.ApiToken);
         if (!string.IsNullOrWhiteSpace(resource.DeployBypassToken))
             http.DefaultRequestHeaders.Add("X-Deploy-Token", resource.DeployBypassToken);
@@ -1565,7 +1652,10 @@ internal sealed class DokployInfrastructure(
             http,
             loggerFactory.CreateLogger<DokployApiClient>(),
             resource.VerboseHttpLogging
-        );
+        )
+        {
+            NativeDeployTimeout = resource.DeploymentTimeout,
+        };
     }
 
     /// <summary>

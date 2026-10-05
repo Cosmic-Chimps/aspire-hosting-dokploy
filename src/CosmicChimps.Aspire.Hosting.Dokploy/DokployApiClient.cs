@@ -26,6 +26,24 @@ public partial class DokployApiClient
     private readonly ILogger<DokployApiClient> _logger;
     private readonly bool _verboseHttp;
 
+    /// <summary>
+    /// Timeout for the native database <c>*.deploy</c> calls. Default 10 minutes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Unlike <c>application.deploy</c>, which queues a job and returns, <c>postgres.deploy</c> and
+    /// its siblings run the whole deploy inside the request: image pull, Swarm service update, and
+    /// a wait for the service to converge. A first deploy pulling a large image easily outlasts the
+    /// usual 100 s, and a client-side timeout then fails the step while Dokploy carries on and
+    /// succeeds.
+    /// </para>
+    /// <para>
+    /// Only takes effect if the supplied <see cref="HttpClient"/>'s own <c>Timeout</c> is at least as
+    /// long — that one caps every request regardless. The deploy step passes an infinite one.
+    /// </para>
+    /// </remarks>
+    public TimeSpan NativeDeployTimeout { get; init; } = TimeSpan.FromMinutes(10);
+
     public DokployApiClient(
         HttpClient httpClient,
         ILogger<DokployApiClient> logger,
@@ -566,7 +584,10 @@ public partial class DokployApiClient
     public async Task DeployRedisAsync(DeployRedisRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST redis.deploy redisId={Id}", request.RedisId);
-        await _client.Request("api", "redis.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
+        await _client
+            .Request("api", "redis.deploy")
+            .WithTimeout(NativeDeployTimeout)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── MariaDB ─────────────────────────────────────────────────────────────
@@ -610,6 +631,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST mariadb.deploy mariadbId={Id}", request.MariaDbId);
         await _client
             .Request("api", "mariadb.deploy")
+            .WithTimeout(NativeDeployTimeout)
             .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
@@ -649,7 +671,10 @@ public partial class DokployApiClient
     public async Task DeployMongoAsync(DeployMongoRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST mongo.deploy mongoId={Id}", request.MongoId);
-        await _client.Request("api", "mongo.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
+        await _client
+            .Request("api", "mongo.deploy")
+            .WithTimeout(NativeDeployTimeout)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── MySQL ───────────────────────────────────────────────────────────────
@@ -688,7 +713,10 @@ public partial class DokployApiClient
     public async Task DeployMySqlAsync(DeployMySqlRequest request, CancellationToken ct = default)
     {
         _logger.LogDebug("POST mysql.deploy mysqlId={Id}", request.MySqlId);
-        await _client.Request("api", "mysql.deploy").SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
+        await _client
+            .Request("api", "mysql.deploy")
+            .WithTimeout(NativeDeployTimeout)
+            .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
     // ─── PostgreSQL ───────────────────────────────────────────────────────────
@@ -732,6 +760,7 @@ public partial class DokployApiClient
         _logger.LogDebug("POST postgres.deploy postgresId={Id}", request.PostgresId);
         await _client
             .Request("api", "postgres.deploy")
+            .WithTimeout(NativeDeployTimeout)
             .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
