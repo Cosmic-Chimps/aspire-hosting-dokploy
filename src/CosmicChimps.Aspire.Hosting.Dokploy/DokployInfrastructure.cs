@@ -166,6 +166,9 @@ internal sealed class DokployInfrastructure(
             string.Join(", ", servicesToDeploy.Select(s => s.Name))
         );
 
+        foreach (var warning in FindSettingsIgnoredOnNativeServices(resource, servicesToDeploy))
+            logger.LogWarning("{Warning}", warning);
+
         // ── 6. Build in-memory state store (always populated from live Dokploy below) ─
         var stateStore = new DokployStateStore(logger);
 
@@ -1571,6 +1574,55 @@ internal sealed class DokployInfrastructure(
         };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// One warning per native database that carries <c>WithDokploy*</c> settings — which only
+    /// apply to Dokploy applications and were otherwise dropped without a word.
+    /// </summary>
+    /// <remarks>
+    /// The case that prompted it: <c>AddPostgres(...).WithDokployMount(...)</c>, once the README's own
+    /// volume example. The postgres image makes it a Dokploy-managed database, whose deploy path never
+    /// reads mounts, so the mount silently did nothing. (Data was still kept: Dokploy gives every
+    /// managed database its own <c>&lt;appName&gt;-data</c> volume.)
+    /// </remarks>
+    internal static IReadOnlyList<string> FindSettingsIgnoredOnNativeServices(
+        DokployResource resource,
+        IEnumerable<DokployServiceDescriptor> services
+    )
+    {
+        var warnings = new List<string>();
+        foreach (var svc in services.Where(s => s.IsNativeService))
+        {
+            bool For(string serviceName) =>
+                string.Equals(serviceName, svc.Name, StringComparison.OrdinalIgnoreCase);
+
+            var ignored = resource.Annotations
+                .Select(a => a switch
+                {
+                    DokployServiceMountAnnotation m when For(m.ServiceName) =>
+                        m.Type == "bind" ? "WithDokployBindMount" : "WithDokployMount",
+                    DokployServiceDomainAnnotation d when For(d.ServiceName) => "WithDokployDomain",
+                    DokployServiceHealthCheckAnnotation h when For(h.ServiceName) => "WithDokployHealthCheck",
+                    DokployServiceStopGracePeriodAnnotation s when For(s.ServiceName) => "WithDokployStopGracePeriod",
+                    DokployServiceUpdateOrderAnnotation u when For(u.ServiceName) => "WithDokployUpdateOrder",
+                    DokployServiceSkipRedeployAnnotation r when For(r.ServiceName) => "WithDokploySkipRedeploy",
+                    DokployServiceNoSubstitutionAnnotation n when For(n.ServiceName) => "WithDokployNoSubstitution",
+                    _ => null,
+                })
+                .OfType<string>()
+                .Distinct()
+                .ToList();
+
+            if (ignored.Count > 0)
+                warnings.Add(
+                    $"'{svc.Name}' is deployed as a Dokploy-managed {svc.NativeServiceType} database, so "
+                        + $"{string.Join(", ", ignored)} on it has no effect — those settings apply to "
+                        + "Dokploy applications only. Dokploy gives the database its own persistent "
+                        + "'<appName>-data' volume; manage anything else in the Dokploy UI."
+                );
+        }
+        return warnings;
+    }
 
     private DokployApiClient BuildApiClient(DokployResource resource)
     {
