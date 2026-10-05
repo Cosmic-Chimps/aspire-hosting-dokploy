@@ -119,6 +119,15 @@ public class DokployResource : Resource
     /// </summary>
     public bool DeployDashboard { get; set; }
 
+    /// <summary>Wait for application deploys to finish. See <see cref="Models.DokploySettings.WaitForDeployments"/>.</summary>
+    public bool WaitForDeployments { get; set; } = true;
+
+    /// <summary>Per-deploy wait limit. See <see cref="Models.DokploySettings.DeploymentTimeout"/>.</summary>
+    public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Delay between deployment status polls. Internal so tests can shorten it.</summary>
+    internal TimeSpan DeploymentPollInterval { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Env key prefixes replaced wholesale on deploy. See <see cref="Models.DokploySettings.ReplacedEnvPrefixes"/>.</summary>
     public IReadOnlyList<string> ReplacedEnvPrefixes { get; set; } = ["REVERSEPROXY__"];
 }

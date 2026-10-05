@@ -99,6 +99,37 @@ public class DokploySettings
     public bool VerboseHttpLogging { get; set; }
 
     /// <summary>
+    /// Wait for every application deploy to finish in Dokploy, and fail the deploy step if any of
+    /// them fails. Default <c>true</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>application.deploy</c> only queues the deploy. Without waiting, an image that cannot be
+    /// pulled or a Swarm update that fails still reports as deployed, and the first sign of trouble
+    /// is a down service. With waiting, the step polls each deploy until Dokploy reports
+    /// <c>done</c>, <c>error</c> or <c>cancelled</c>, and a failure carries Dokploy's error message
+    /// and the tail of the deployment log.
+    /// </para>
+    /// <para>
+    /// The waits run concurrently, after every service has been configured, so the step takes as
+    /// long as the slowest deploy rather than the sum of them. Native databases are not polled:
+    /// their deploy call already blocks until it finishes and fails the step itself.
+    /// </para>
+    /// <para>
+    /// <c>done</c> means Dokploy finished the deploy. It does not mean the application is healthy;
+    /// add <c>WithDokployHealthCheck</c> for that.
+    /// </para>
+    /// </remarks>
+    public bool WaitForDeployments { get; set; } = true;
+
+    /// <summary>
+    /// How long to wait for each application deploy when <see cref="WaitForDeployments"/> is set.
+    /// Default 10 minutes. A deploy still running at the timeout fails the step, but it is not
+    /// cancelled in Dokploy.
+    /// </summary>
+    public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Environment-variable key prefixes the deploy OWNS outright. Existing Dokploy keys under one of
     /// these prefixes are dropped before merging, so the family is fully replaced on every deploy.
     /// Default: <c>REVERSEPROXY__</c> (the Aspire YARP route/cluster configuration).

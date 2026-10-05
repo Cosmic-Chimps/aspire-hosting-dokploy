@@ -323,6 +323,36 @@ Set the log level to `Debug` for `CosmicChimps.Aspire.Hosting.Dokploy` to also s
 request and the resolved API base address (never the token — only whether one is present, and its
 length, which is enough to spot a truncated secret).
 
+## Waiting for deploys to finish
+
+`application.deploy` only **queues** a deploy in Dokploy. By default the deploy step then waits for
+each application deploy to finish, and fails if any ends in `error` or `cancelled`. An image that
+can't be pulled, or a Swarm update that fails, shows up as a red step rather than a down service.
+
+Each failure is logged with Dokploy's error message and the last 50 lines of the deployment log:
+
+```
+api deploy finished with status 'error': ...
+  deployment id: x7Kq...
+  last log lines:
+  ...
+```
+
+The waits run concurrently after every service is configured, so the step takes as long as the
+slowest deploy, not the sum. Native databases are not polled: their deploy call already blocks until
+it finishes and fails the step on its own.
+
+```csharp
+builder.PublishToDokploy("myapp", s =>
+{
+    s.DeploymentTimeout = TimeSpan.FromMinutes(20); // default 10 minutes, per deploy
+    // s.WaitForDeployments = false;                // fire-and-forget, the old behaviour
+});
+```
+
+A deploy still running at the timeout fails the step, but it is **not** cancelled in Dokploy. `done`
+means Dokploy finished the deploy, not that the app is healthy; use `WithDokployHealthCheck` for that.
+
 ## Configuring with Aspire parameters
 
 Every deployment setting accepts either a literal string or an Aspire **parameter**, resolved when

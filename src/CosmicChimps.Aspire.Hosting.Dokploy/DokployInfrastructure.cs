@@ -273,6 +273,9 @@ internal sealed class DokployInfrastructure(
         }
 
         // ── 10. PASS 2: Configure each service (env vars + image) then deploy ─
+        //    Application deploys are only queued here; step 11 waits for them.
+        var deployRunId = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
+        var pendingDeployments = new List<PendingDeployment>();
         foreach (var svc in servicesToDeploy)
         {
             // Replace compose service names with Dokploy appNames in env values,
@@ -324,6 +327,7 @@ internal sealed class DokployInfrastructure(
             );
 #pragma warning restore ASPIREPIPELINES001
 
+            PendingDeployment? pending = null;
             try
             {
                 if (svc.IsNativeService)
@@ -340,7 +344,7 @@ internal sealed class DokployInfrastructure(
                 else
                 {
                     var applicationId = stateStore.GetApplicationId(svc.Name)!;
-                    await ConfigureAndDeployApplicationAsync(
+                    pending = await ConfigureAndDeployApplicationAsync(
                         svc,
                         applicationId,
                         envString,
@@ -350,13 +354,20 @@ internal sealed class DokployInfrastructure(
                         healthCheckAnnotations,
                         stopGracePeriodAnnotations,
                         updateOrderAnnotations,
+                        deployRunId,
                         ct
                     );
+                    if (pending is not null)
+                        pendingDeployments.Add(pending);
                 }
 
                 var appName = serviceNameMap[svc.Name];
 #pragma warning disable ASPIREPIPELINES001
-                await svcTask.CompleteAsync($"Deployed {svc.Name} → {appName}");
+                await svcTask.CompleteAsync(
+                    pending is null
+                        ? $"Deployed {svc.Name} → {appName}"
+                        : $"Deploy of {svc.Name} → {appName} queued in Dokploy"
+                );
 #pragma warning restore ASPIREPIPELINES001
             }
             catch (Exception ex)
@@ -371,6 +382,11 @@ internal sealed class DokployInfrastructure(
                 throw;
             }
         }
+
+        // ── 11. Wait for the queued application deploys to finish ─────────────
+        //    Concurrently, so the step costs the slowest deploy rather than the sum.
+        if (pendingDeployments.Count > 0)
+            await WaitForDeploymentsAsync(pendingDeployments, resource, apiClient, reportingStep, ct);
 
         logger.LogInformation("Dokploy deployment complete for '{Name}'", resource.Name);
     }
@@ -1032,7 +1048,11 @@ internal sealed class DokployInfrastructure(
 
     // ── Pass 2: Configure + Deploy ────────────────────────────────────────────
 
-    private async Task ConfigureAndDeployApplicationAsync(
+    /// <returns>
+    /// The triggered deploy to wait for, or <c>null</c> when the deploy was skipped
+    /// (<c>WithDokploySkipRedeploy</c>) or waiting is off.
+    /// </returns>
+    private async Task<PendingDeployment?> ConfigureAndDeployApplicationAsync(
         DokployServiceDescriptor svc,
         string applicationId,
         string? envString,
@@ -1042,9 +1062,11 @@ internal sealed class DokployInfrastructure(
         IReadOnlyDictionary<string, HealthCheckSwarm> healthCheckAnnotations,
         IReadOnlyDictionary<string, long> stopGracePeriodAnnotations,
         IReadOnlyDictionary<string, string> updateOrderAnnotations,
+        string deployRunId,
         CancellationToken ct
     )
     {
+        PendingDeployment? pending = null;
         var registry = svc.Registry ?? resource.Registry;
 
         var imageToUse = ResolveImageReference(svc.Name, svc.Image, registry, logger);
@@ -1275,12 +1297,26 @@ internal sealed class DokployInfrastructure(
             }
         }
 
-        // Deploy the application (trigger Swarm rolling update).
+        // Deploy the application (trigger Swarm rolling update). This only queues it in Dokploy;
+        // the unique title is what lets WaitForDeploymentsAsync find the resulting deployment row.
+        var deployTitle = $"Aspire deploy of {svc.Name} ({deployRunId})";
+        var priorDeploymentIds = resource.WaitForDeployments
+            ? await TryListDeploymentIdsAsync(svc.Name, applicationId, apiClient, ct)
+            : null;
+
         logger.LogInformation("Deploying application '{Service}' ({Id})", svc.Name, applicationId);
         await apiClient.DeployApplicationAsync(
-            new DeployApplicationRequest { ApplicationId = applicationId },
+            new DeployApplicationRequest
+            {
+                ApplicationId = applicationId,
+                Title = deployTitle,
+                Description = "Deployed by CosmicChimps.Aspire.Hosting.Dokploy",
+            },
             ct
         );
+
+        if (resource.WaitForDeployments)
+            pending = new PendingDeployment(svc.Name, applicationId, deployTitle, priorDeploymentIds);
 
         afterDockerSave:
 
@@ -1380,7 +1416,128 @@ internal sealed class DokployInfrastructure(
                 );
             }
         }
+
+        return pending;
     }
+
+    /// <summary>
+    /// Snapshot of an application's deployment IDs taken just before a deploy is triggered, so the
+    /// new row can be recognised even by a Dokploy that ignores the title. <c>null</c> on failure —
+    /// the waiter then matches by title only, never by "anything not in an empty set".
+    /// </summary>
+    private async Task<IReadOnlySet<string>?> TryListDeploymentIdsAsync(
+        string serviceName,
+        string applicationId,
+        DokployApiClient apiClient,
+        CancellationToken ct
+    )
+    {
+        try
+        {
+            var existing = await apiClient.GetDeploymentsByApplicationIdAsync(applicationId, ct);
+            return existing
+                .Select(d => d.DeploymentId)
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "Could not list existing deployments for '{Service}' — will match its deploy by title only",
+                serviceName
+            );
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Waits for every triggered application deploy to reach a terminal status, concurrently, and
+    /// fails the step if any did not finish <c>done</c>.
+    /// </summary>
+    /// <remarks>
+    /// All waits run to completion before failing, so one broken service does not hide the state of
+    /// the others — the report lists every failure, each with Dokploy's error and log tail.
+    /// </remarks>
+    private async Task WaitForDeploymentsAsync(
+        IReadOnlyList<PendingDeployment> pendingDeployments,
+        DokployResource resource,
+        DokployApiClient apiClient,
+        IReportingStep reportingStep,
+        CancellationToken ct
+    )
+    {
+        var waiter = new DokployDeploymentWaiter(
+            async (applicationId, token) =>
+                await apiClient.GetDeploymentsByApplicationIdAsync(applicationId, token),
+            apiClient.ReadDeploymentLogsAsync,
+            logger,
+            resource.DeploymentPollInterval
+        );
+
+        logger.LogInformation(
+            "Waiting up to {Timeout} for {Count} deploy(s) to finish in Dokploy: {Names}",
+            resource.DeploymentTimeout,
+            pendingDeployments.Count,
+            string.Join(", ", pendingDeployments.Select(p => p.ServiceName))
+        );
+
+        var outcomes = await Task.WhenAll(
+            pendingDeployments.Select(async pending =>
+            {
+#pragma warning disable ASPIREPIPELINES001
+                await using var waitTask = await reportingStep.CreateTaskAsync(
+                    $"Waiting for {pending.ServiceName} to finish deploying...",
+                    ct
+                );
+                var outcome = await waiter.WaitAsync(pending, resource.DeploymentTimeout, ct);
+                await waitTask.CompleteAsync(
+                    DescribeOutcome(outcome, resource.DeploymentTimeout),
+                    outcome.Kind == DeploymentOutcomeKind.Succeeded
+                        ? CompletionState.Completed
+                        : CompletionState.CompletedWithError,
+                    ct
+                );
+#pragma warning restore ASPIREPIPELINES001
+                return outcome;
+            })
+        );
+
+        var failures = outcomes.Where(o => o.Kind != DeploymentOutcomeKind.Succeeded).ToList();
+        if (failures.Count == 0)
+            return;
+
+        foreach (var failure in failures)
+            logger.LogError(
+                "{Summary}\n  deployment id: {DeploymentId}\n  last log lines:\n{LogTail}",
+                DescribeOutcome(failure, resource.DeploymentTimeout),
+                failure.DeploymentId ?? "(never appeared)",
+                failure.LogTail ?? "(no log available)"
+            );
+
+        throw new InvalidOperationException(
+            $"{failures.Count} of {outcomes.Length} Dokploy deploy(s) did not finish successfully: "
+                + string.Join("; ", failures.Select(f => DescribeOutcome(f, resource.DeploymentTimeout)))
+                + ". The deployment log tail for each is logged above; the full log is in the "
+                + "Dokploy UI under the application's Deployments tab."
+        );
+    }
+
+    internal static string DescribeOutcome(DeploymentOutcome outcome, TimeSpan timeout) =>
+        outcome.Kind switch
+        {
+            DeploymentOutcomeKind.Succeeded => $"{outcome.Pending.ServiceName} deployed",
+            DeploymentOutcomeKind.Failed =>
+                $"{outcome.Pending.ServiceName} deploy finished with status '{outcome.Status}'"
+                    + (outcome.ErrorMessage is null ? string.Empty : $": {outcome.ErrorMessage}"),
+            _ when outcome.DeploymentId is null =>
+                $"{outcome.Pending.ServiceName} deploy never appeared in Dokploy within {timeout} "
+                    + "(is the Dokploy deployment queue stuck?)",
+            _ =>
+                $"{outcome.Pending.ServiceName} deploy still '{outcome.Status}' after {timeout} — "
+                    + "it was not cancelled in Dokploy; raise DokploySettings.DeploymentTimeout if "
+                    + "this service is slow to deploy",
+        };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
