@@ -123,9 +123,10 @@ public class DokploySettings
     public bool WaitForDeployments { get; set; } = true;
 
     /// <summary>
-    /// How long to wait for each application deploy when <see cref="WaitForDeployments"/> is set.
-    /// Default 10 minutes. A deploy still running at the timeout fails the step, but it is not
-    /// cancelled in Dokploy.
+    /// How long to wait for each application deploy when <see cref="WaitForDeployments"/> is set,
+    /// and the request timeout for each native database deploy (which blocks until it finishes,
+    /// whatever <see cref="WaitForDeployments"/> says). Default 10 minutes. A deploy still running at
+    /// the timeout fails the step, but it is not cancelled in Dokploy.
     /// </summary>
     public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);
 
