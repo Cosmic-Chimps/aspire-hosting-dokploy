@@ -471,6 +471,50 @@ public partial class DokployApiClient
             .SendAsync(HttpMethod.Post, JsonBody(request), cancellationToken: ct);
     }
 
+    // ─── Deployments ─────────────────────────────────────────────────────────
+
+    public async Task<List<DeploymentListItem>> GetDeploymentsByApplicationIdAsync(
+        string applicationId,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET deployment.all applicationId={Id}", applicationId);
+        var json = await _client
+            .Request("api", "deployment.all")
+            .SetQueryParam("applicationId", applicationId)
+            .GetStringAsync(cancellationToken: ct);
+        return JsonSerializer.Deserialize<List<DeploymentListItem>>(json, JsonSerializerOptions) ?? [];
+    }
+
+    /// <summary>
+    /// Last <paramref name="tail"/> lines of a deployment's build/deploy log. Empty when Dokploy has
+    /// no log file for it, which is also what Dokploy Cloud returns for server-less deploys.
+    /// </summary>
+    public async Task<string> ReadDeploymentLogsAsync(
+        string deploymentId,
+        int tail,
+        CancellationToken ct = default
+    )
+    {
+        _logger.LogDebug("GET deployment.readLogs deploymentId={Id} tail={Tail}", deploymentId, tail);
+        var json = await _client
+            .Request("api", "deployment.readLogs")
+            .SetQueryParam("deploymentId", deploymentId)
+            .SetQueryParam("tail", tail)
+            .GetStringAsync(cancellationToken: ct);
+
+        // The procedure returns a bare string, which the OpenAPI adapter sends as a JSON string.
+        // Fall back to the raw body rather than lose the log over an encoding surprise.
+        try
+        {
+            return JsonSerializer.Deserialize<string>(json, JsonSerializerOptions) ?? string.Empty;
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
+    }
+
     public async Task UpdateApplicationAsync(
         UpdateApplicationRequest request,
         CancellationToken ct = default

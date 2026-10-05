@@ -67,6 +67,8 @@ public static class DokployResourceExtensions
             ComposeEnvironmentBuilder = composeEnv,
             DeployDashboard = settings.DeployDashboard,
             VerboseHttpLogging = settings.VerboseHttpLogging,
+            WaitForDeployments = settings.WaitForDeployments,
+            DeploymentTimeout = settings.DeploymentTimeout,
             ReplacedEnvPrefixes = settings.ReplacedEnvPrefixes.ToList(),
         };
 

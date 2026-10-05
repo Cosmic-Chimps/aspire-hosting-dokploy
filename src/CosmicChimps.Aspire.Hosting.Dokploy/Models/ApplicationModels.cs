@@ -90,6 +90,16 @@ public class DeployApplicationRequest
 {
     [JsonPropertyName("applicationId")]
     public required string ApplicationId { get; set; }
+
+    /// <summary>
+    /// Becomes the <c>title</c> of the deployment record Dokploy creates — the only way to find
+    /// THIS deploy in <c>deployment.all</c> afterwards. Dokploy defaults it to "Manual deployment".
+    /// </summary>
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
 }
 
 /// <summary>
