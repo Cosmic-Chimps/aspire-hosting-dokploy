@@ -13,3 +13,4 @@ aspire-output/
 test-results/
 pack-check/
 .serena
+.claude/worktrees
