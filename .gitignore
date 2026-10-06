@@ -14,3 +14,4 @@ test-results/
 pack-check/
 .serena
 .claude/worktrees
+.claude/.headroom*
