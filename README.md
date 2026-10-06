@@ -580,8 +580,9 @@ over an SSH tunnel:
 ssh -N -L 18888:localhost:18888 user@docker-host
 ```
 
-Note also that telemetry retention is bounded and in-memory — it is a live diagnostic window, not an
-archive, and a restart loses it.
+Note also that by default telemetry does not survive a restart — it is a live diagnostic window, not
+an archive. Aspire 13.6 can persist it; see [Optional: keep telemetry across restarts and
+redeploys](#optional-keep-telemetry-across-restarts-and-redeploys), including what that puts on disk.
 
 ### Optional: keep sign-in alive across restarts
 
@@ -601,8 +602,62 @@ image](#mount-a-path-that-exists-in-the-image).
 
 This is optional. Without it the dashboard works; you just sign in again after each restart.
 
-See [Aspire dashboard security considerations](https://aspire.dev/dashboard/security-considerations/)
-and [dashboard configuration](https://aspire.dev/dashboard/configuration/).
+### Optional: keep telemetry across restarts and redeploys
+
+Since Aspire 13.6 the dashboard can store resource snapshots and telemetry in SQLite and keep a run
+history. A dashboard the AppHost launches locally does this by default. A deployed one is a
+*standalone* dashboard, whose default is `None` — a temporary database deleted on shutdown — so every
+redeploy still starts empty unless you opt in:
+
+```csharp
+dashboard
+    .WithEnvironment("ASPIRE_DASHBOARD_PERSISTENCE_MODE", "Run")
+    // Partitions the stored data and suffixes the cookie names. Keep it fixed: a new name is a new,
+    // empty history, and one more sign-in.
+    .WithEnvironment("ASPIRE_DASHBOARD_APPLICATION_NAME", "myapp")
+    .WithDokployMount(dokploy, "/home/app", "myapp-dashboard-home");
+```
+
+The `/home/app` mount from the previous section serves both. The data directory defaults to
+`<ASPIRE_HOME>/dashboard`, which in the image is `/home/app/.aspire/dashboard` — verified against the
+`13.6` image: the database lands at `/home/app/.aspire/dashboard/runs/<run-id>/dashboard.db`, owned
+by 1654, with no extra setup. Set `ASPIRE_DASHBOARD_DATA_DIRECTORY` only if you mount elsewhere.
+
+| Mode | After a redeploy | Use when |
+|---|---|---|
+| `None` (default) | An empty dashboard | A live diagnostic window is enough |
+| `Run` | A new run; earlier ones selectable, read-only, from the header. 10 unpinned runs are kept | Recommended |
+| `Resume` | The same database reopened — one continuous history, no run selector | Single replica, stop-first updates only |
+
+**`Resume` holds an exclusive lock.** A second dashboard on the same volume exits on startup with
+code 100 — *"Dashboard data for application '…' is already in use by another dashboard process"*
+(verified with two containers on one volume). So it cannot scale past one replica, and an update that
+starts the new container before stopping the old one fails until the old one is gone. `Run` has no
+such conflict: each process opens a run of its own.
+
+In `Run`, every container start is a run, crash restarts included, so a restart loop can push the
+runs you care about out of the window of 10. Pin the ones you want to keep.
+
+Before turning it on:
+
+- **It is not a telemetry backend.** No replication, backups, disk quota or encryption at rest. Keep
+  Seq or another OTLP backend for anything you must retain.
+- **The volume holds sensitive data.** Values the UI masks are stored unredacted. The volume — and
+  any Dokploy backup or snapshot of it — contains every log, trace and environment value the
+  dashboard received. Protect it like a secret store.
+- **Disk use only grows.** Console logs, structured logs and traces default to 100,000 entries each
+  per database, oldest evicted first — but that is an entry count, not a size cap, and the file never
+  shrinks (no `VACUUM`). `Run` keeps up to 10 such databases plus the live one and any pinned. For a
+  long-lived `Resume` database, keep `Dashboard__TelemetryLimits__MaxAttributeLength` and
+  `Dashboard__TelemetryLimits__MaxSpanEventCount` finite and watch the disk.
+- **Schema changes are not migrated.** After an Aspire upgrade moves the dashboard image to a new
+  schema, older runs show as disabled in `Run`, and `Resume` replaces the incompatible database. The
+  publisher pins the image to the Aspire `major.minor`, so this happens on Aspire upgrades, not on
+  every deploy.
+
+See [Aspire dashboard security considerations](https://aspire.dev/dashboard/security-considerations/),
+[dashboard configuration](https://aspire.dev/dashboard/configuration/) and [dashboard data
+persistence](https://aspire.dev/dashboard/data-persistence/).
 
 ## Examples
 

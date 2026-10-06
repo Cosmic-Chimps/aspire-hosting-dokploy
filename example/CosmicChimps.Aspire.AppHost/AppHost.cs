@@ -127,7 +127,17 @@ dokploy.WithDokployDashboard(dashboard =>
         // Optional. Omit the domain to keep the dashboard internal-only and reach it over an SSH
         // tunnel instead; the OTLP ingest ports stay on the container network either way.
         .WithDokployDomain(dokploy, dashboardDomain, port: 18888)
-        // Optional: persist DataProtection keys so sign-in survives a restart.
+        // Optional (Aspire 13.6+): keep telemetry across restarts and redeploys. A deployed
+        // dashboard is standalone, so its default is None — a temp database deleted on shutdown.
+        // In Run, each container start is a run, browsable read-only from the header (10 kept).
+        // Not Resume: it locks the database, and an overlapping container exits on startup.
+        // The name partitions the data, so a per-environment name keeps histories apart even if
+        // environments on one server share the volume below. The data lands there, under
+        // .aspire/dashboard.
+        .WithEnvironment("ASPIRE_DASHBOARD_PERSISTENCE_MODE", "Run")
+        .WithEnvironment("ASPIRE_DASHBOARD_APPLICATION_NAME", $"demo-{environmentName}")
+        // Optional: persist DataProtection keys so sign-in survives a restart — and, with the two
+        // settings above, the telemetry database.
         //
         // Mount /home/app, NOT the nested .aspnet/DataProtection-Keys. Docker seeds a fresh volume
         // from the image only when the mount path exists there, ownership included; over a missing
